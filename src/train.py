@@ -199,14 +199,19 @@ def main(args):
     # ── Data ──────────────────────────────────────────────────────────────────
     print("\n── Loading dataset ──")
     train_ds = get_train_dataset(args.data_root, num_segments=args.num_segments)
-    test_ds  = get_test_dataset(args.data_root,  num_segments=args.num_val_segs)
+
+    if args.num_val_segs > 0:
+        test_ds    = get_test_dataset(args.data_root, num_segments=args.num_val_segs)
+        val_loader = DataLoader(
+            test_ds, batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=False,
+        )
+    else:
+        print("Validation disabled (--num-val-segs 0)")
+        val_loader = None
 
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=False,
-    )
-    val_loader = DataLoader(
-        test_ds, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=False,
     )
 
@@ -222,7 +227,7 @@ def main(args):
     checkpoint_cb = ModelCheckpoint(
         dirpath   = out_dir,
         filename  = "best_model",
-        monitor   = "val/loss",
+        monitor   = "val/loss" if args.num_val_segs > 0 else "train/loss_epoch",
         mode      = "min",
         save_last = True,
         verbose   = True,
