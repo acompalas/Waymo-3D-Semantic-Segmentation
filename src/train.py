@@ -110,6 +110,9 @@ class LiDARDiffusionModule(L.LightningModule):
         self.register_buffer("_val_intersection", torch.zeros(NUM_CLASSES, dtype=torch.long))
         self.register_buffer("_val_union",        torch.zeros(NUM_CLASSES, dtype=torch.long))
 
+    def on_fit_start(self):
+        self.ddpm.to(self.device)
+
     def on_validation_start(self):
         self.ddpm.to(self.device)
 
