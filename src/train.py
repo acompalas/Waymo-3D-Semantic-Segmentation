@@ -24,19 +24,22 @@ Usage:
 Full options:
     --num-segments  N   Segments to train on, front of sorted list (default: 10, max: 40)
     --epochs        N   Training epochs (default: 50)
-    --batch-size    N   Batch size (default: 2)
+    --batch-size    N   Batch size (default: 1)
     --lr            F   Learning rate (default: 2e-4)
     --T             N   Diffusion timesteps (default: 1000)
     --base-channels N   U-Net base channel width (default: 32)
     --data-root     P   Path to training/ directory
     --out-dir       P   Where to save checkpoints and outputs (default: outputs/)
     --seed          N   Random seed (default: 0)
-    --workers       N   DataLoader workers (default: 0, safe on Windows)
+    --workers       N   DataLoader workers (default: 0)
+    --prefetch-factor N Batches prefetched per worker (default: 2)
+    --segment-cache-size N Segment LRU cache size per worker (default: 1)
     --precision     S   32, 16-mixed, bf16-mixed (default: 32)
 """
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -50,7 +53,10 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import CSVLogger
 
 sys.path.insert(0, str(Path(__file__).parent))
-from dataset   import get_train_dataset, get_test_dataset, NUM_CLASSES, CLASS_NAMES
+from dataset   import (
+    get_train_dataset, get_test_dataset, NUM_CLASSES, CLASS_NAMES,
+    SegmentShuffleSampler,
+)
 from model     import LiDARDiffusionUNet
 from diffusion import DDPM
 
@@ -196,26 +202,60 @@ class LiDARDiffusionModule(L.LightningModule):
 def main(args):
     L.seed_everything(args.seed)
 
+    if args.workers > 0:
+        os.environ.setdefault("POLARS_MAX_THREADS", "1")
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Data ──────────────────────────────────────────────────────────────────
     print("\n── Loading dataset ──")
-    train_ds = get_train_dataset(args.data_root, num_segments=args.num_segments)
+    train_ds = get_train_dataset(
+        args.data_root,
+        num_segments=args.num_segments,
+        segment_cache_size=args.segment_cache_size,
+    )
 
     if args.num_val_segs > 0:
-        test_ds    = get_test_dataset(args.data_root, num_segments=args.num_val_segs)
+        test_ds    = get_test_dataset(
+            args.data_root,
+            num_segments=args.num_val_segs,
+            segment_cache_size=max(1, args.segment_cache_size // 2),
+        )
+        val_loader_kwargs = dict(
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=torch.cuda.is_available(),
+        )
+        if args.workers > 0:
+            val_loader_kwargs["persistent_workers"] = True
+            val_loader_kwargs["prefetch_factor"] = args.prefetch_factor
+            val_loader_kwargs["multiprocessing_context"] = "spawn"
+
         val_loader = DataLoader(
-            test_ds, batch_size=args.batch_size, shuffle=False,
-            num_workers=args.workers, pin_memory=False,
+            test_ds,
+            **val_loader_kwargs,
         )
     else:
         print("Validation disabled (--num-val-segs 0)")
         val_loader = None
 
+    train_sampler = SegmentShuffleSampler(train_ds, seed=args.seed)
+    train_loader_kwargs = dict(
+        batch_size=args.batch_size,
+        sampler=train_sampler,
+        num_workers=args.workers,
+        pin_memory=torch.cuda.is_available(),
+    )
+    if args.workers > 0:
+        train_loader_kwargs["persistent_workers"] = True
+        train_loader_kwargs["prefetch_factor"] = args.prefetch_factor
+        train_loader_kwargs["multiprocessing_context"] = "spawn"
+
     train_loader = DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=False,
+        train_ds,
+        **train_loader_kwargs,
     )
 
     # ── Module ────────────────────────────────────────────────────────────────
@@ -282,6 +322,10 @@ def parse_args():
     parser.add_argument("--out-dir",       type=str,   default=str(DEFAULT_OUT_DIR))
     parser.add_argument("--seed",          type=int,   default=0)
     parser.add_argument("--workers",       type=int,   default=0)
+    parser.add_argument("--prefetch-factor", type=int, default=2,
+                        help="Batches prefetched per worker (used when workers > 0)")
+    parser.add_argument("--segment-cache-size", type=int, default=1,
+                        help="How many segments to keep in RAM cache per worker (0 disables cache)")
     parser.add_argument("--precision",     type=str,   default="32",
                         choices=["32", "16-mixed", "bf16-mixed"])
     return parser.parse_args()
