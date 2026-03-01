@@ -110,9 +110,6 @@ class LiDARDiffusionModule(L.LightningModule):
         self.register_buffer("_val_intersection", torch.zeros(NUM_CLASSES, dtype=torch.long))
         self.register_buffer("_val_union",        torch.zeros(NUM_CLASSES, dtype=torch.long))
 
-    def on_fit_start(self):
-        self.ddpm.to(self.device)
-
     def on_validation_start(self):
         self.ddpm.to(self.device)
 
@@ -266,10 +263,10 @@ def parse_args():
         epilog=__doc__,
     )
     parser.add_argument("--num-segments",  type=int,   default=40)
-    parser.add_argument("--num-val-segs",  type=int,   default=10,
-                        help="Test segments to use for validation during training (default 10)")
+    parser.add_argument("--num-val-segs",  type=int,   default=3,
+                        help="Test segments to use for validation during training (default 3)")
     parser.add_argument("--epochs",        type=int,   default=50)
-    parser.add_argument("--batch-size",    type=int,   default=2)
+    parser.add_argument("--batch-size",    type=int,   default=1)
     parser.add_argument("--lr",            type=float, default=2e-4)
     parser.add_argument("--T",             type=int,   default=1000)
     parser.add_argument("--base-channels", type=int,   default=32)

@@ -190,18 +190,20 @@ def get_train_dataset(
 ) -> "WaymoRangeImageDataset":
     """
     Return training dataset using the first num_segments segments
-    (sorted alphabetically). Clamps to however many are actually available.
+    (sorted alphabetically). Always reserves the last 10 for testing.
     """
     data_root = Path(data_root)
     all_stems = sorted(p.stem for p in (data_root / "lidar_segmentation").glob("*.parquet"))
 
-    available = len(all_stems)
-    if num_segments > available:
-        print(f"  WARNING: requested {num_segments} train segments but only {available} available. Using {available}.")
-        num_segments = available
+    available  = len(all_stems)
+    max_train  = max(0, available - 10)  # always reserve last 10 for test
+
+    if num_segments > max_train:
+        print(f"  WARNING: requested {num_segments} train segments but only {max_train} available without overlapping test set. Using {max_train}.")
+        num_segments = max_train
 
     train_segs = all_stems[:num_segments]
-    print(f"Train segments: {len(train_segs)} (of {available} available)")
+    print(f"Train segments: {len(train_segs)} (of {max_train} available for training)")
 
     ds = WaymoRangeImageDataset(data_root, segments=train_segs)
     print(f"  Train frames: {len(ds)}")
@@ -213,19 +215,17 @@ def get_test_dataset(
     num_segments: int = 10,
 ) -> "WaymoRangeImageDataset":
     """
-    Return test dataset using the last num_segments segments
-    (sorted alphabetically). Clamps to however many are actually available.
+    Return test dataset always from the last 10 segments.
+    num_segments controls how many of those 10 to use (max 10).
     """
     data_root = Path(data_root)
     all_stems = sorted(p.stem for p in (data_root / "lidar_segmentation").glob("*.parquet"))
 
-    available = len(all_stems)
-    if num_segments > available:
-        print(f"  WARNING: requested {num_segments} test segments but only {available} available. Using {available}.")
-        num_segments = available
+    available    = len(all_stems)
+    num_segments = min(num_segments, 10, available)
 
-    test_segs = all_stems[-num_segments:]
-    print(f"Test segments: {len(test_segs)} (of {available} available)")
+    test_segs = all_stems[-10:][-num_segments:] if num_segments < 10 else all_stems[-10:]
+    print(f"Test segments: {len(test_segs)} (from last 10 of {available} total)")
 
     ds = WaymoRangeImageDataset(data_root, segments=test_segs)
     print(f"  Test frames: {len(ds)}")
