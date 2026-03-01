@@ -1,0 +1,40 @@
+# Outputs and checkpoints
+outputs/
+*.ckpt
+*.pt
+*.pth
+
+# Large data files
+*.parquet
+*.tfrecord
+*.bag
+Waymo Data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,25 @@
+# Core data
+polars
+pyarrow          # polars needs this for parquet reading
+
+# Numerics / ML
+numpy
+scipy
+
+# 3D visualization
+open3d
+
+# Image export (for GIFs)
+Pillow
+
+# ML framework
+torch
+torchvision
+pytorch-lightning
+
+# Plotting (for exploration notebooks)
+matplotlib
+
+# Notebook
+jupyter
+ipykernel
