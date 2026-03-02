@@ -8,6 +8,7 @@ Key differences from vanilla DDPM:
   - x_0 is a soft label map (23, H, W), not an RGB image
   - The U-Net is conditioned on the LiDAR range image (4, H, W)
   - Loss is masked to only backprop on valid pixels (range > 0)
+  - Optional per-class inverse-frequency weighting to handle class imbalance
   - No latent encoding step — we work directly in range image space
 """
 
@@ -37,6 +38,7 @@ class DDPM:
         Loss (simple MSE from slides, no weighting term):
             L = E[|| eps - eps_theta(x_t, t) ||^2]
             masked to valid pixels only
+            optionally weighted by inverse class frequency
     """
 
     def __init__(
@@ -117,28 +119,45 @@ class DDPM:
     # ── Loss ───────────────────────────────────────────────────────────────────
     def loss(
         self,
-        eps_pred: torch.Tensor,   # (B, C, H, W)  U-Net output
-        eps_true: torch.Tensor,   # (B, C, H, W)  sampled noise
-        valid:    torch.Tensor,   # (B, H, W)     bool mask
+        eps_pred:     torch.Tensor,              # (B, C, H, W)  U-Net output
+        eps_true:     torch.Tensor,              # (B, C, H, W)  sampled noise
+        valid:        torch.Tensor,              # (B, H, W)     bool mask
+        labels:       torch.Tensor | None = None,  # (B, H, W)  int64 true class
+        class_weights: torch.Tensor | None = None, # (C,)       per-class weights
     ) -> torch.Tensor:
         """
-        Simple MSE loss on epsilon, masked to valid pixels only.
+        MSE loss on epsilon, masked to valid pixels only.
+        Optionally weighted by per-class inverse frequency weights.
 
         From slides:
             L_simple = E[|| eps - eps_theta(x_t, t) ||^2]
 
-        We zero out invalid pixels (range = 0) before averaging so the
-        model is not penalized for predictions on empty space.
+        With class weighting:
+            L = E[w(c) * || eps - eps_theta(x_t, t) ||^2]
+            where w(c) = inverse frequency weight for the true class c at each pixel.
+            Rare classes (motorcyclist, bicyclist) get upweighted so the model
+            is penalized more for getting them wrong.
         """
-        # valid: (B, H, W) → (B, 1, H, W) to broadcast over C
-        mask = valid.unsqueeze(1).float()  # (B, 1, H, W)
+        # Mask: valid range pixels AND not undefined (label 0)
+        if labels is not None:
+            defined_mask = (labels != 0)
+            mask = (valid & defined_mask).unsqueeze(1).float()  # (B, 1, H, W)
+        else:
+            mask = valid.unsqueeze(1).float()                   # (B, 1, H, W)
 
-        diff  = (eps_pred - eps_true) ** 2   # (B, C, H, W)
-        diff  = diff * mask                   # zero out invalid pixels
+        diff = (eps_pred - eps_true) ** 2          # (B, C, H, W)
+        diff = diff * mask                          # zero out invalid/undefined pixels
 
-        # Normalize by number of valid pixels to avoid scale issues when
-        # the fill rate varies between frames (our fill rate is ~83%)
-        n_valid = mask.sum().clamp(min=1.0)
+        if class_weights is not None and labels is not None:
+            # pixel_weights: (B, H, W) — one scalar weight per pixel from its true class
+            # class_weights[0] = 0.0 so undefined pixels contribute nothing
+            pixel_weights = class_weights[labels.clamp(0, class_weights.shape[0] - 1)]  # (B, H, W)
+            pixel_weights = pixel_weights.unsqueeze(1)             # (B, 1, H, W)
+            diff = diff * pixel_weights
+            n_valid = (pixel_weights * mask).sum().clamp(min=1.0)
+        else:
+            n_valid = mask.sum().clamp(min=1.0)
+
         return diff.sum() / n_valid
 
     # ── Reverse process (single step) ─────────────────────────────────────────
@@ -155,20 +174,16 @@ class DDPM:
             mu_theta = (1/sqrt(alpha_t)) * (x_t - (1-alpha_t)/sqrt(1-alpha_bar_t) * eps_theta)
             x_{t-1}  = mu_theta + sqrt(beta_tilde_t) * z    (z=0 at t=1)
         """
-        # Predict noise
         eps_pred = model(x_t, t, cond)
 
-        # Compute mu_theta (slide formula)
         recip_sqrt_alpha = self._extract(self.sqrt_recip_alphas, t, x_t.shape)
         beta_t           = self._extract(self.betas,             t, x_t.shape)
         sqrt_1mab        = self._extract(self.sqrt_one_minus_ab, t, x_t.shape)
 
         mu = recip_sqrt_alpha * (x_t - (beta_t / sqrt_1mab) * eps_pred)
 
-        # Add noise only if t > 1 (slide Algorithm 2 line 3)
         sqrt_beta_tilde = self._extract(self.sqrt_beta_tilde, t, x_t.shape)
         z = torch.randn_like(x_t)
-        # Mask z to zero for samples at t=1
         nonzero = (t > 1).float().view(t.shape[0], *([1] * (len(x_t.shape) - 1)))
         z = z * nonzero
 
@@ -190,7 +205,6 @@ class DDPM:
         B, _, H, W = cond.shape
         device      = cond.device
 
-        # Start from pure Gaussian noise
         x_t = torch.randn(B, num_classes, H, W, device=device)
 
         for t_int in reversed(range(1, self.T + 1)):

@@ -4,6 +4,8 @@ outputs/
 *.pt
 *.pth
 
+/archived/
+
 # Large data files
 *.parquet
 *.tfrecord
