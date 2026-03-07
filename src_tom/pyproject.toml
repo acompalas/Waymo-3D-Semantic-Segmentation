@@ -1,0 +1,12 @@
+[project]
+name = "ece271b-final-project-work"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "matplotlib>=3.9.4",
+    "numpy>=2.0.2",
+    "polars>=1.36.1",
+    "torch>=2.8.0",
+]
