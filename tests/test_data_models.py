@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 
@@ -109,6 +110,94 @@ class DataAndModelTests(unittest.TestCase):
         point_svm = LinearSVMPointClassifier(num_classes=23)
         prediction = point_svm.predict_segmented_pointcloud(point_frame=point_frame, sampling_steps=7)
         self.assertEqual(prediction["pred_labels"].shape[0], prediction["points_xyz"].shape[0])
+
+    def test_shared_stage_output_contract_for_all_models(self) -> None:
+        point_dm = WaymoLidarDataModule(
+            data_dir=self.point_root,
+            representation="point_clouds",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            num_workers=0,
+            max_cached_segments=1,
+        )
+        point_dm.setup("fit")
+        point_batch = next(iter(point_dm.train_dataloader()))
+
+        range_dm = WaymoLidarDataModule(
+            data_dir=self.range_root,
+            representation="range_images",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            num_workers=0,
+            max_cached_segments=1,
+        )
+        range_dm.setup("fit")
+        range_batch = next(iter(range_dm.train_dataloader()))
+
+        models_and_batches = [
+            (LinearSVMPointClassifier(num_classes=23), point_batch),
+            (RangeImageUNetSegmenter(num_classes=23, base_channels=4, depth=2), range_batch),
+            (PointCloudDiffusionSegmenter(num_classes=23, hidden_dim=32, depth=2, diffusion_steps=4), point_batch),
+            (RangeImageDiffusionSegmenter(num_classes=23, base_channels=4, diffusion_steps=4), range_batch),
+        ]
+        for model, batch in models_and_batches:
+            output = model.compute_stage_output(batch, stage="train", prediction_mode="cheap", evaluation=False)
+            self.assertEqual(sorted(output), ["batch_size", "labels", "loss", "metric_mask", "preds"])
+            self.assertEqual(output["preds"].shape, output["labels"].shape)
+            self.assertEqual(output["metric_mask"].shape, output["labels"].shape)
+
+    def test_diffusion_validation_prediction_mode_switches_full_sampler_usage(self) -> None:
+        dm = WaymoLidarDataModule(
+            data_dir=self.point_root,
+            representation="point_clouds",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            num_workers=0,
+            max_cached_segments=1,
+        )
+        dm.setup("fit")
+        batch = next(iter(dm.val_dataloader()))
+
+        model = PointCloudDiffusionSegmenter(num_classes=23, hidden_dim=32, depth=2, diffusion_steps=4)
+        with patch.object(model, "predict_point_labels", wraps=model.predict_point_labels) as full_predict:
+            model.compute_stage_output(batch, stage="val", prediction_mode="cheap", evaluation=True)
+            self.assertEqual(full_predict.call_count, 0)
+            model.compute_stage_output(batch, stage="val", prediction_mode="full", evaluation=True)
+            self.assertEqual(full_predict.call_count, 1)
+
+    def test_diffusion_sampling_override_applies_to_full_validation_prediction(self) -> None:
+        dm = WaymoLidarDataModule(
+            data_dir=self.point_root,
+            representation="point_clouds",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            num_workers=0,
+            max_cached_segments=1,
+        )
+        dm.setup("fit")
+        batch = next(iter(dm.val_dataloader()))
+
+        model = PointCloudDiffusionSegmenter(num_classes=23, hidden_dim=32, depth=2, diffusion_steps=4)
+        model.set_sampling_steps(3)
+        with patch.object(model.ddpm, "sample", wraps=model.ddpm.sample) as sample_mock:
+            model.compute_stage_output(batch, stage="val", prediction_mode="full", evaluation=True)
+            self.assertEqual(sample_mock.call_args.kwargs["steps"], 3)
 
 
 if __name__ == "__main__":

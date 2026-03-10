@@ -60,8 +60,9 @@ Train:
 ```bash
 python -m src.main train --model point_svm
 python -m src.main train --model range_unet
-python -m src.main train --model range_diffusion --diffusion-steps 200
-python -m src.main train --model point_diffusion --backbone edgeconv --diffusion-steps 200
+python -m src.main train --model range_diffusion --diffusion-steps 200 --validation-prediction-mode cheap
+python -m src.main train --model point_diffusion --backbone edgeconv --diffusion-steps 200 --validation-prediction-mode full
+python -m src.main train --model point_svm --no-auto-evaluate
 ```
 
 Evaluate:
@@ -69,6 +70,7 @@ Evaluate:
 ```bash
 python -m src.main evaluate --model range_unet --checkpoint output/range_unet/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
+python -m src.main evaluate --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt --splits train,val,test
 ```
 
 Render:
@@ -83,11 +85,42 @@ Common options:
 - `--train-subdirs`, `--val-subdirs`, `--test-subdirs`: choose source subsets from `segment_source.json`
 - `--batch-size`, `--num-points`, `--num-workers`, `--seed`
 - `--output-dir`: training/evaluation output root
+- `--auto-evaluate` / `--no-auto-evaluate`: control whether training automatically runs the final checkpoint report pass
+- diffusion models also accept `--validation-prediction-mode cheap|full`
 
 Important behavior:
 - dataset representation is inferred from `--model`
 - class balancing, masking, scene splitting, and checkpoint/runtime behavior come from the shared `src/data` and `src/models` stack
 - evaluation metrics only use `valid_label` and exclude class `0`
+
+## Metrics And Reports
+All models now use the same metric pipeline.
+
+Per epoch during training:
+- `train_loss`, `val_loss`, `test_loss` as available for the current loop
+- `train_acc`, `val_acc`, `test_acc`
+- `train_mIoU`, `val_mIoU`, `test_mIoU`
+- `train_IoU_class_<k>`, `val_IoU_class_<k>`, `test_IoU_class_<k>`
+
+Metric semantics:
+- confusion matrices and IoU only count elements under `valid_label`
+- class `0` is excluded from mIoU but still gets its own per-class IoU scalar
+- diffusion models use `cheap` or `full` validation predictions according to `--validation-prediction-mode`
+- final report passes always use full denoising for diffusion models
+
+Training outputs:
+- the usual Lightning CSV logs and checkpoints under the model run directory
+- when auto-evaluation is enabled:
+  - `final_report.json`
+  - `train_confusion_raw.png`, `train_confusion_normalized.png`
+  - `val_confusion_raw.png`, `val_confusion_normalized.png`
+  - `test_confusion_raw.png`, `test_confusion_normalized.png`
+
+Evaluation outputs:
+- `python -m src.main evaluate ...` writes a structured JSON report plus raw and normalized confusion-matrix PNGs for the requested `--splits`
+
+Render environment:
+- on Linux, the renderer sets `GDK_BACKEND=x11` and `XDG_SESSION_TYPE=x11` before importing Open3D
 
 ## Data Pipeline
 The training and rendering code expects preprocessed artifacts, not raw Waymo parquet files. The repository includes two preprocessing scripts under `data_pipeline`:

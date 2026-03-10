@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+import sys
 
 import numpy as np
 from PIL import Image
@@ -79,6 +81,13 @@ def save_gif(frames_rgb: list[np.ndarray], output_path: Path, fps: float) -> Non
     )
 
 
+def ensure_open3d_linux_env() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    os.environ.setdefault("GDK_BACKEND", "x11")
+    os.environ.setdefault("XDG_SESSION_TYPE", "x11")
+
+
 def render_point_cloud(
     points: np.ndarray,
     colors: np.ndarray,
@@ -88,6 +97,7 @@ def render_point_cloud(
     point_size: float,
     camera_preset: str,
 ) -> np.ndarray:
+    ensure_open3d_linux_env()
     import open3d as o3d
 
     pcd = o3d.geometry.PointCloud()

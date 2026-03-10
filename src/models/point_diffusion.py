@@ -217,8 +217,13 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         backbone: str = "edgeconv",
         knn_k: int = 16,
         use_balanced_class_weights: bool = True,
+        validation_prediction_mode: str = "cheap",
     ) -> None:
-        super().__init__(num_classes=num_classes, use_balanced_class_weights=use_balanced_class_weights)
+        super().__init__(
+            num_classes=num_classes,
+            use_balanced_class_weights=use_balanced_class_weights,
+            validation_prediction_mode=validation_prediction_mode,
+        )
         self.save_hyperparameters()
         self.model = build_denoiser(
             backbone=str(backbone),
@@ -229,14 +234,7 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         )
         self.ddpm = DDPM(T=int(diffusion_steps))
 
-    def on_fit_start(self) -> None:
-        super().on_fit_start()
-        self.ddpm.to(self.device)
-
-    def on_validation_start(self) -> None:
-        self.ddpm.to(self.device)
-
-    def on_test_start(self) -> None:
+    def prepare_runtime(self) -> None:
         self.ddpm.to(self.device)
 
     def predict_point_labels(
@@ -257,23 +255,12 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         preds = x0.argmax(dim=-1)
         return torch.where(valid_geometry, preds, torch.zeros_like(preds))
 
-    def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        points = batch["points"].float()
-        labels = batch["labels"].long()
-        valid_geometry = batch["valid_geometry"].bool()
-        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
-        t = torch.randint(1, self.ddpm.T + 1, (points.shape[0],), device=self.device, dtype=torch.long)
-        x_t, eps = self.ddpm.q_sample(x0, t)
-        eps_pred = self.model(x_t, t, points)
-        loss = self.ddpm.loss(eps_pred, eps, valid_geometry, labels=labels, class_weights=self.class_weights, class_dim=2)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=int(points.shape[0]))
-        return loss
-
-    def validation_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        points = batch["points"].float()
-        labels = batch["labels"].long()
-        valid_geometry = batch["valid_geometry"].bool()
-        valid_label = batch["valid_label"].bool()
+    def _evaluation_loss(
+        self,
+        points: torch.Tensor,
+        labels: torch.Tensor,
+        valid_geometry: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
         t = torch.ones(points.shape[0], device=self.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
@@ -282,36 +269,60 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
         sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
         x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
-        preds = x0_est.argmax(dim=-1)
-        metric_mask = valid_geometry & valid_label & (labels > 0)
-        self.update_confmat(stage="val", preds=preds[metric_mask], labels=labels[metric_mask])
-        acc = (preds[metric_mask] == labels[metric_mask]).float().mean() if bool(metric_mask.any()) else loss.new_tensor(0.0)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(points.shape[0]))
-        self.log("val_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(points.shape[0]))
-        return loss
+        return loss, x0_est.argmax(dim=-1)
 
-    def test_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
+    def _training_loss_and_predictions(
+        self,
+        points: torch.Tensor,
+        labels: torch.Tensor,
+        valid_geometry: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
+        t = torch.randint(1, self.ddpm.T + 1, (points.shape[0],), device=self.device, dtype=torch.long)
+        x_t, eps = self.ddpm.q_sample(x0, t)
+        eps_pred = self.model(x_t, t, points)
+        loss = self.ddpm.loss(eps_pred, eps, valid_geometry, labels=labels, class_weights=self.class_weights, class_dim=2)
+        sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
+        sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
+        x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
+        return loss, x0_est.argmax(dim=-1)
+
+    def _compute_stage_output(
+        self,
+        batch: dict,
+        *,
+        stage: str,
+        prediction_mode: str,
+        evaluation: bool,
+    ) -> dict:
+        _ = stage
         points = batch["points"].float()
         labels = batch["labels"].long()
         valid_geometry = batch["valid_geometry"].bool()
         valid_label = batch["valid_label"].bool()
-        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
-        t = torch.ones(points.shape[0], device=self.device, dtype=torch.long)
-        x_t, eps = self.ddpm.q_sample(x0, t)
-        eps_pred = self.model(x_t, t, points)
-        loss = self.ddpm.loss(eps_pred, eps, valid_geometry, labels=labels, class_weights=None, class_dim=2)
-        preds = self.predict_point_labels(
-            points,
-            batch["point_features"].float(),
-            valid_geometry,
-            sampling_steps=self.resolve_sampling_steps(),
-        )
+        batch_size = int(points.shape[0])
+        if evaluation:
+            loss, cheap_preds = self._evaluation_loss(points, labels, valid_geometry)
+            if prediction_mode == "full":
+                preds = self.predict_point_labels(
+                    points,
+                    batch["point_features"].float(),
+                    valid_geometry,
+                    sampling_steps=self.resolve_sampling_steps(),
+                )
+            else:
+                preds = torch.where(valid_geometry, cheap_preds, torch.zeros_like(cheap_preds))
+        else:
+            loss, preds = self._training_loss_and_predictions(points, labels, valid_geometry)
+
         metric_mask = valid_geometry & valid_label & (labels > 0)
-        self.update_confmat(stage="test", preds=preds[metric_mask], labels=labels[metric_mask])
-        acc = (preds[metric_mask] == labels[metric_mask]).float().mean() if bool(metric_mask.any()) else loss.new_tensor(0.0)
-        self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(points.shape[0]))
-        self.log("test_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(points.shape[0]))
-        return loss
+        return {
+            "loss": loss,
+            "preds": preds,
+            "labels": labels,
+            "metric_mask": metric_mask,
+            "batch_size": batch_size,
+        }
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(

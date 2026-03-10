@@ -265,8 +265,13 @@ class RangeImageDiffusionSegmenter(RangeImageSegmentationModel):
         learning_rate: float = 2e-4,
         diffusion_steps: int = 1000,
         use_balanced_class_weights: bool = True,
+        validation_prediction_mode: str = "cheap",
     ) -> None:
-        super().__init__(num_classes=num_classes, use_balanced_class_weights=use_balanced_class_weights)
+        super().__init__(
+            num_classes=num_classes,
+            use_balanced_class_weights=use_balanced_class_weights,
+            validation_prediction_mode=validation_prediction_mode,
+        )
         self.save_hyperparameters()
         self.model = LiDARDiffusionUNet(
             num_classes=int(num_classes),
@@ -275,14 +280,7 @@ class RangeImageDiffusionSegmenter(RangeImageSegmentationModel):
         )
         self.ddpm = DDPM(T=int(diffusion_steps))
 
-    def on_fit_start(self) -> None:
-        super().on_fit_start()
-        self.ddpm.to(self.device)
-
-    def on_validation_start(self) -> None:
-        self.ddpm.to(self.device)
-
-    def on_test_start(self) -> None:
+    def prepare_runtime(self) -> None:
         self.ddpm.to(self.device)
 
     def prepare_batch(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -311,18 +309,12 @@ class RangeImageDiffusionSegmenter(RangeImageSegmentationModel):
         preds = self._predict_labels(cond, valid, sampling_steps=sampling_steps)
         return preds, labels
 
-    def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        cond, labels, valid = self.prepare_batch(batch)
-        x0 = labels_to_soft_range(labels, int(self.hparams.num_classes), valid)
-        t = torch.randint(1, self.ddpm.T + 1, (cond.shape[0],), device=self.device, dtype=torch.long)
-        x_t, eps = self.ddpm.q_sample(x0, t)
-        eps_pred = self.model(x_t, t, cond)
-        loss = self.ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=self.class_weights, class_dim=1)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, batch_size=int(batch["range_images"].shape[0]))
-        return loss
-
-    def validation_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        cond, labels, valid = self.prepare_batch(batch)
+    def _evaluation_loss(
+        self,
+        cond: torch.Tensor,
+        labels: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         x0 = labels_to_soft_range(labels, int(self.hparams.num_classes), valid)
         t = torch.ones(cond.shape[0], device=self.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
@@ -331,26 +323,51 @@ class RangeImageDiffusionSegmenter(RangeImageSegmentationModel):
         sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
         sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
         x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
-        preds = x0_est.argmax(dim=1)
-        self.update_confmat(stage="val", preds=preds[valid], labels=labels[valid])
-        acc = (preds[valid] == labels[valid]).float().mean() if bool(valid.any()) else loss.new_tensor(0.0)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(batch["range_images"].shape[0]))
-        self.log("val_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(batch["range_images"].shape[0]))
-        return loss
+        return loss, x0_est.argmax(dim=1)
 
-    def test_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        cond, labels, valid = self.prepare_batch(batch)
+    def _training_loss_and_predictions(
+        self,
+        cond: torch.Tensor,
+        labels: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         x0 = labels_to_soft_range(labels, int(self.hparams.num_classes), valid)
-        t = torch.ones(cond.shape[0], device=self.device, dtype=torch.long)
+        t = torch.randint(1, self.ddpm.T + 1, (cond.shape[0],), device=self.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
         eps_pred = self.model(x_t, t, cond)
-        loss = self.ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=None, class_dim=1)
-        preds = self._predict_labels(cond, valid, sampling_steps=self.resolve_sampling_steps())
-        self.update_confmat(stage="test", preds=preds[valid], labels=labels[valid])
-        acc = (preds[valid] == labels[valid]).float().mean() if bool(valid.any()) else loss.new_tensor(0.0)
-        self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(batch["range_images"].shape[0]))
-        self.log("test_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=int(batch["range_images"].shape[0]))
-        return loss
+        loss = self.ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=self.class_weights, class_dim=1)
+        sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
+        sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
+        x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
+        return loss, x0_est.argmax(dim=1)
+
+    def _compute_stage_output(
+        self,
+        batch: dict,
+        *,
+        stage: str,
+        prediction_mode: str,
+        evaluation: bool,
+    ) -> dict:
+        _ = stage
+        cond, labels, valid = self.prepare_batch(batch)
+        batch_size = int(batch["range_images"].shape[0])
+        if evaluation:
+            loss, cheap_preds = self._evaluation_loss(cond, labels, valid)
+            if prediction_mode == "full":
+                preds = self._predict_labels(cond, valid, sampling_steps=self.resolve_sampling_steps())
+            else:
+                preds = torch.where(valid, cheap_preds, torch.zeros_like(cheap_preds))
+        else:
+            loss, preds = self._training_loss_and_predictions(cond, labels, valid)
+
+        return {
+            "loss": loss,
+            "preds": preds,
+            "labels": labels,
+            "metric_mask": valid & (labels > 0),
+            "batch_size": batch_size,
+        }
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=float(self.hparams.learning_rate))

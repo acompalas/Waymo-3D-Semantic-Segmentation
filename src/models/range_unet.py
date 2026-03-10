@@ -135,35 +135,41 @@ class RangeImageUNetSegmenter(RangeImageSegmentationModel):
         preds = torch.where(valid, preds, torch.zeros_like(preds))
         return preds, labels
 
-    def _shared_step(self, batch: dict, stage: str) -> torch.Tensor:
+    def _compute_stage_output(
+        self,
+        batch: dict,
+        *,
+        stage: str,
+        prediction_mode: str,
+        evaluation: bool,
+    ) -> dict:
+        _ = stage
+        _ = prediction_mode
+        _ = evaluation
         logits, labels, valid = self._predict_logits(batch)
         preds = logits.argmax(dim=1)
         batch_size = int(batch["range_images"].shape[0])
 
         if not bool(valid.any()):
             loss = logits.sum() * 0.0
-            self.log(f"{stage}_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
-            return loss
+            return {
+                "loss": loss,
+                "preds": torch.zeros_like(labels),
+                "labels": labels,
+                "metric_mask": valid,
+                "batch_size": batch_size,
+            }
 
         target = labels.clone()
         target[~valid] = -100
         loss = F.cross_entropy(logits, target, weight=self.class_weights, ignore_index=-100)
-        if stage in {"val", "test"}:
-            self.update_confmat(stage=stage, preds=preds[valid], labels=labels[valid])
-
-        acc = (preds[valid] == labels[valid]).float().mean()
-        self.log(f"{stage}_loss", loss, on_step=(stage == "train"), on_epoch=True, prog_bar=True, batch_size=batch_size)
-        self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
-        return loss
-
-    def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="train")
-
-    def validation_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="val")
-
-    def test_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="test")
+        return {
+            "loss": loss,
+            "preds": preds,
+            "labels": labels,
+            "metric_mask": valid,
+            "batch_size": batch_size,
+        }
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(self.parameters(), lr=float(self.hparams.learning_rate))

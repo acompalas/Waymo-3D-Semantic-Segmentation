@@ -1,5 +1,4 @@
 import argparse
-import json
 from pathlib import Path
 import sys
 from typing import Iterable
@@ -11,7 +10,17 @@ import numpy as np
 import torch
 
 from .data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
-from .runtime import MODEL_REGISTRY, get_model_spec
+from .runtime import (
+    MODEL_REGISTRY,
+    collect_stage_reports,
+    get_model_spec,
+    log_final_report_metrics,
+    parse_report_splits,
+    prepare_model_for_reporting,
+    resolve_runtime_device,
+    setup_datamodule_for_report,
+    write_report_bundle,
+)
 from .tools import label_colors, render_point_cloud, save_gif
 
 
@@ -54,12 +63,16 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--precision", type=str, default="32")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
+    parser.add_argument("--auto-evaluate", dest="auto_evaluate", action="store_true")
+    parser.add_argument("--no-auto-evaluate", dest="auto_evaluate", action="store_false")
+    parser.set_defaults(auto_evaluate=True)
 
 
 def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--test-subdirs", type=str, default="validation")
+    parser.add_argument("--splits", type=str, default="test")
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--num-points", type=int, default=16384)
     parser.add_argument("--num-classes", type=int, default=23)
@@ -153,6 +166,7 @@ def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
 
 def configure_trainer(args: argparse.Namespace, logger: CSVLogger | bool, callbacks: list) -> L.Trainer:
     return L.Trainer(
+        default_root_dir=str(getattr(args, "output_dir", Path("output"))),
         max_epochs=getattr(args, "max_epochs", 1),
         accelerator=args.accelerator,
         devices=args.devices,
@@ -171,7 +185,9 @@ def run_train(args: argparse.Namespace) -> None:
     model = spec.build_module(args)
 
     logger = CSVLogger(save_dir=str(args.output_dir), name=args.model)
+    run_dir = Path(logger.log_dir)
     checkpoint_cb = ModelCheckpoint(
+        dirpath=run_dir / "checkpoints",
         monitor="val_mIoU",
         mode="max",
         save_top_k=1,
@@ -186,12 +202,27 @@ def run_train(args: argparse.Namespace) -> None:
     )
     trainer = configure_trainer(args, logger, [checkpoint_cb, early_stopping_cb])
     trainer.fit(model=model, datamodule=datamodule)
-    trainer.test(datamodule=datamodule, ckpt_path="best")
 
+    if not bool(args.auto_evaluate):
+        return
 
-def _write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    checkpoint_path = Path(checkpoint_cb.best_model_path or checkpoint_cb.last_model_path)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Unable to locate checkpoint after training: {checkpoint_path}")
+
+    setup_datamodule_for_report(datamodule, ("train", "val", "test"))
+    report_model = spec.load_from_checkpoint(checkpoint_path)
+    report_device = resolve_runtime_device(args.accelerator)
+    prepare_model_for_reporting(report_model, datamodule, report_device)
+    stage_reports = collect_stage_reports(report_model, datamodule, splits=("train", "val", "test"), device=report_device)
+    report_payload = write_report_bundle(
+        spec=spec,
+        checkpoint_path=checkpoint_path,
+        stage_reports=stage_reports,
+        output_dir=run_dir,
+        report_name="final_report",
+    )
+    log_final_report_metrics(logger, report_payload, step=trainer.global_step)
 
 
 def run_evaluate(args: argparse.Namespace) -> None:
@@ -200,19 +231,17 @@ def run_evaluate(args: argparse.Namespace) -> None:
     datamodule = build_datamodule(args)
     model = spec.load_from_checkpoint(args.checkpoint)
     model.set_sampling_steps(args.sampling_steps)
-
-    trainer = configure_trainer(args, False, [])
-    results = trainer.test(model=model, datamodule=datamodule, ckpt_path=None)
-    metrics = results[0] if results else {}
-    conf = model.get_confusion_matrix("test").detach().cpu().tolist() if hasattr(model, "get_confusion_matrix") else None
-    _write_json(
-        Path(args.output_dir) / f"{args.model}_metrics.json",
-        {
-            "model": args.model,
-            "checkpoint": str(args.checkpoint),
-            "metrics": metrics,
-            "confusion_matrix": conf,
-        },
+    requested_splits = parse_report_splits(args.splits)
+    setup_datamodule_for_report(datamodule, requested_splits)
+    report_device = resolve_runtime_device(args.accelerator)
+    prepare_model_for_reporting(model, datamodule, report_device)
+    stage_reports = collect_stage_reports(model, datamodule, splits=requested_splits, device=report_device)
+    write_report_bundle(
+        spec=spec,
+        checkpoint_path=Path(args.checkpoint),
+        stage_reports=stage_reports,
+        output_dir=Path(args.output_dir),
+        report_name=f"{args.model}_report",
     )
 
 

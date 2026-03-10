@@ -2,6 +2,8 @@ import argparse
 import tempfile
 import unittest
 from pathlib import Path
+import json
+import os
 from unittest.mock import patch
 
 import lightning as L
@@ -10,13 +12,15 @@ from lightning.pytorch.loggers import CSVLogger
 import numpy as np
 
 from src.data import WaymoLidarDataModule
-from src.main import run_render
+from src.main import run_evaluate, run_render, run_train
 from src.models import (
     LinearSVMPointClassifier,
     PointCloudDiffusionSegmenter,
     RangeImageDiffusionSegmenter,
     RangeImageUNetSegmenter,
 )
+from src.runtime import get_model_spec
+from src.tools.rendering import ensure_open3d_linux_env
 from tests.helpers import build_synthetic_preprocessed_roots
 
 
@@ -210,6 +214,147 @@ class EndToEndSmokeTests(unittest.TestCase):
             )
 
         self.assertEqual(calls, [(True, False)])
+
+    def test_train_writes_final_report_artifacts_and_uses_checkpoint_reload(self) -> None:
+        output_dir = self.base_dir / "train_outputs"
+        spec = get_model_spec("point_svm")
+        with patch.object(spec.module_cls, "load_from_checkpoint", wraps=spec.module_cls.load_from_checkpoint) as load_mock:
+            run_train(
+                argparse.Namespace(
+                    command="train",
+                    model="point_svm",
+                    data_dir=self.point_root,
+                    train_subdirs="training",
+                    val_subdirs="validation",
+                    test_subdirs="validation",
+                    batch_size=1,
+                    num_points=8,
+                    num_classes=23,
+                    val_fraction=0.1,
+                    num_workers=0,
+                    worker_start_method="spawn",
+                    max_epochs=1,
+                    lr=1e-3,
+                    no_balanced_class_weights=False,
+                    early_stopping_patience=2,
+                    early_stopping_min_delta=0.0,
+                    train_segment_fraction=1.0,
+                    max_cached_segments=1,
+                    accelerator="cpu",
+                    devices=1,
+                    precision="32",
+                    seed=0,
+                    output_dir=output_dir,
+                    auto_evaluate=True,
+                    svm_reg=1e-4,
+                    margin=1.0,
+                    knn_scales="2",
+                    knn_support_size=8,
+                    knn_query_chunk=8,
+                )
+            )
+
+        self.assertGreaterEqual(load_mock.call_count, 1)
+        run_dir = next((output_dir / "point_svm").glob("version_*"))
+        report_path = run_dir / "final_report.json"
+        self.assertTrue(report_path.exists())
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(payload["stages"]), ["test", "train", "val"])
+        for name in ("train_confusion_raw.png", "train_confusion_normalized.png", "val_confusion_raw.png", "test_confusion_raw.png"):
+            self.assertTrue((run_dir / name).exists())
+
+    def test_train_can_skip_auto_evaluation(self) -> None:
+        output_dir = self.base_dir / "train_no_eval"
+        run_train(
+            argparse.Namespace(
+                command="train",
+                model="point_svm",
+                data_dir=self.point_root,
+                train_subdirs="training",
+                val_subdirs="validation",
+                test_subdirs="validation",
+                batch_size=1,
+                num_points=8,
+                num_classes=23,
+                val_fraction=0.1,
+                num_workers=0,
+                worker_start_method="spawn",
+                max_epochs=1,
+                lr=1e-3,
+                no_balanced_class_weights=False,
+                early_stopping_patience=2,
+                early_stopping_min_delta=0.0,
+                train_segment_fraction=1.0,
+                max_cached_segments=1,
+                accelerator="cpu",
+                devices=1,
+                precision="32",
+                seed=0,
+                output_dir=output_dir,
+                auto_evaluate=False,
+                svm_reg=1e-4,
+                margin=1.0,
+                knn_scales="2",
+                knn_support_size=8,
+                knn_query_chunk=8,
+            )
+        )
+        run_dir = next((output_dir / "point_svm").glob("version_*"))
+        self.assertFalse((run_dir / "final_report.json").exists())
+
+    def test_evaluate_writes_requested_split_report(self) -> None:
+        ckpt_path = _fit_and_save(
+            LinearSVMPointClassifier(num_classes=23, knn_scales=(2,), knn_support_size=8, knn_query_chunk=8),
+            self._point_dm(),
+            self.base_dir / "eval_ckpt",
+        )
+        output_dir = self.base_dir / "eval_report"
+        run_evaluate(
+            argparse.Namespace(
+                command="evaluate",
+                model="point_svm",
+                checkpoint=ckpt_path,
+                data_dir=self.point_root,
+                test_subdirs="validation",
+                splits="test",
+                batch_size=1,
+                num_points=8,
+                num_classes=23,
+                num_workers=0,
+                worker_start_method="spawn",
+                max_cached_segments=1,
+                sampling_steps=None,
+                accelerator="cpu",
+                devices=1,
+                precision="32",
+                seed=0,
+                output_dir=output_dir,
+            )
+        )
+        report_path = output_dir / "point_svm_report.json"
+        self.assertTrue(report_path.exists())
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(payload["stages"]), ["test"])
+        self.assertTrue((output_dir / "test_confusion_raw.png").exists())
+        self.assertTrue((output_dir / "test_confusion_normalized.png").exists())
+
+    def test_linux_open3d_environment_defaults_are_applied(self) -> None:
+        previous_gdk = os.environ.pop("GDK_BACKEND", None)
+        previous_session = os.environ.pop("XDG_SESSION_TYPE", None)
+        try:
+            with patch("src.tools.rendering.sys.platform", "linux"):
+                ensure_open3d_linux_env()
+            self.assertEqual(os.environ["GDK_BACKEND"], "x11")
+            self.assertEqual(os.environ["XDG_SESSION_TYPE"], "x11")
+        finally:
+            if previous_gdk is None:
+                os.environ.pop("GDK_BACKEND", None)
+            else:
+                os.environ["GDK_BACKEND"] = previous_gdk
+            if previous_session is None:
+                os.environ.pop("XDG_SESSION_TYPE", None)
+            else:
+                os.environ["XDG_SESSION_TYPE"] = previous_session
 
 
 if __name__ == "__main__":

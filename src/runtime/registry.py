@@ -51,6 +51,7 @@ def add_range_unet_args(parser: argparse.ArgumentParser) -> None:
 def add_range_diffusion_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--diffusion-steps", type=int, default=1000)
+    parser.add_argument("--validation-prediction-mode", type=str, default="cheap", choices=["cheap", "full"])
 
 
 def add_point_diffusion_args(parser: argparse.ArgumentParser) -> None:
@@ -60,6 +61,7 @@ def add_point_diffusion_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--depth", type=int, default=6)
     parser.add_argument("--backbone", type=str, default="edgeconv", choices=["edgeconv", "pointnet"])
     parser.add_argument("--knn-k", type=int, default=16)
+    parser.add_argument("--validation-prediction-mode", type=str, default="cheap", choices=["cheap", "full"])
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
@@ -109,6 +111,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             learning_rate=args.lr,
             diffusion_steps=args.diffusion_steps,
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
+            validation_prediction_mode=args.validation_prediction_mode,
         ),
     ),
     "point_diffusion": ModelSpec(
@@ -127,6 +130,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             backbone=args.backbone,
             knn_k=args.knn_k,
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
+            validation_prediction_mode=args.validation_prediction_mode,
         ),
     ),
 }

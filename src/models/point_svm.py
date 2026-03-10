@@ -124,7 +124,15 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
         preds = scores.argmax(dim=-1)
         return torch.where(valid_geometry, preds, torch.zeros_like(preds))
 
-    def _shared_step(self, batch: dict, stage: str) -> torch.Tensor:
+    def _compute_stage_output(
+        self,
+        batch: dict,
+        *,
+        stage: str,
+        prediction_mode: str,
+        evaluation: bool,
+    ) -> dict:
+        _ = prediction_mode
         points = batch["points"].float()
         point_features = batch["point_features"].float()
         labels = batch["labels"].long()
@@ -136,36 +144,33 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
             points,
             point_features,
             valid_geometry,
-            update_running=bool(self.training),
+            update_running=bool(stage == "train" and not evaluation),
         )
-        valid = valid_geometry & valid_label & (labels >= 0)
-        if not bool(valid.any()):
+        preds = scores.argmax(dim=-1)
+        metric_mask = valid_geometry & valid_label & (labels > 0)
+        if not bool(metric_mask.any()):
             loss = self.classifier.weight.sum() * 0.0
-            self.log(f"{stage}_loss", loss, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
-            return loss
+            return {
+                "loss": loss,
+                "preds": torch.zeros_like(labels),
+                "labels": labels,
+                "metric_mask": metric_mask,
+                "batch_size": batch_size,
+            }
 
-        x = scores[valid]
-        y = labels[valid]
-        preds = x.argmax(dim=1)
-        if stage in {"val", "test"}:
-            self.update_confmat(stage=stage, preds=preds, labels=y)
+        x = scores[metric_mask]
+        y = labels[metric_mask]
 
         hinge = multiclass_hinge_loss(x, y, margin=float(self.hparams.margin), class_weights=self.class_weights)
         reg = 0.5 * float(self.hparams.svm_reg) * self.classifier.weight.pow(2).sum()
         loss = hinge + reg
-        acc = (preds == y).float().mean()
-        self.log(f"{stage}_loss", loss, on_step=(stage == "train"), on_epoch=True, prog_bar=True, batch_size=batch_size)
-        self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
-        return loss
-
-    def training_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="train")
-
-    def validation_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="val")
-
-    def test_step(self, batch: dict, batch_idx: int) -> torch.Tensor:
-        return self._shared_step(batch, stage="test")
+        return {
+            "loss": loss,
+            "preds": preds,
+            "labels": labels,
+            "metric_mask": metric_mask,
+            "batch_size": batch_size,
+        }
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         return torch.optim.Adam(self.parameters(), lr=float(self.hparams.learning_rate))
