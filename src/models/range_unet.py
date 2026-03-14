@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .base import RangeImageSegmentationModel
+from .inputs import range_input_channels, select_range_model_inputs
 
 
 def _pad_width_circular_height_replicate(x: torch.Tensor, pad_h: int, pad_w: int) -> torch.Tensor:
@@ -92,14 +93,16 @@ class RangeImageUNetSegmenter(RangeImageSegmentationModel):
     def __init__(
         self,
         num_classes: int = 23,
-        in_channels: int = 4,
+        in_channels: int | None = None,
         base_channels: int = 32,
         depth: int = 4,
         dropout: float = 0.0,
         learning_rate: float = 1e-3,
         use_balanced_class_weights: bool = True,
+        geometry_only: bool = False,
     ) -> None:
         super().__init__(num_classes=num_classes, use_balanced_class_weights=use_balanced_class_weights)
+        in_channels = range_input_channels(geometry_only=bool(geometry_only)) if in_channels is None else int(in_channels)
         self.save_hyperparameters()
         self.model = RangeUNet(
             in_channels=int(in_channels),
@@ -110,14 +113,12 @@ class RangeImageUNetSegmenter(RangeImageSegmentationModel):
         )
 
     def prepare_batch(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = batch["range_images"].float()
+        x = select_range_model_inputs(batch["range_images"], geometry_only=bool(self.hparams.geometry_only))
         y = batch["semantic"].long()
         valid = batch["valid_label"].bool()
 
         if x.ndim != 5 or x.shape[-1] != int(self.hparams.in_channels):
-            raise ValueError(
-                f"Expected range_images shape [B,R,H,W,{int(self.hparams.in_channels)}], got {tuple(x.shape)}"
-            )
+            raise ValueError(f"Expected selected range input shape [B,R,H,W,{int(self.hparams.in_channels)}], got {tuple(x.shape)}")
         bsz, returns, height, width, channels = x.shape
         x = x.permute(0, 1, 4, 2, 3).reshape(bsz * returns, channels, height, width)
         y = y.reshape(bsz * returns, height, width)

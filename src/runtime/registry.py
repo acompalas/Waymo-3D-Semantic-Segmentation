@@ -8,6 +8,7 @@ import lightning as L
 from ..models import (
     LinearSVMPointClassifier,
     PointCloudDiffusionSegmenter,
+    PointCloudSupervisedSegmenter,
     RangeImageDiffusionSegmenter,
     RangeImageUNetSegmenter,
 )
@@ -40,18 +41,21 @@ def add_point_svm_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--knn-scales", type=str, default="16,32,64")
     parser.add_argument("--knn-support-size", type=int, default=16384)
     parser.add_argument("--knn-query-chunk", type=int, default=4096)
+    parser.add_argument("--geometry-only", action="store_true")
 
 
 def add_range_unet_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--unet-base-channels", type=int, default=32)
     parser.add_argument("--unet-depth", type=int, default=4)
     parser.add_argument("--unet-dropout", type=float, default=0.0)
+    parser.add_argument("--geometry-only", action="store_true")
 
 
 def add_range_diffusion_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--diffusion-steps", type=int, default=1000)
     parser.add_argument("--validation-prediction-mode", type=str, default="cheap", choices=["cheap", "full"])
+    parser.add_argument("--geometry-only", action="store_true")
 
 
 def add_point_diffusion_args(parser: argparse.ArgumentParser) -> None:
@@ -62,6 +66,16 @@ def add_point_diffusion_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--backbone", type=str, default="edgeconv", choices=["edgeconv", "pointnet"])
     parser.add_argument("--knn-k", type=int, default=16)
     parser.add_argument("--validation-prediction-mode", type=str, default="cheap", choices=["cheap", "full"])
+    parser.add_argument("--geometry-only", action="store_true")
+
+
+def add_point_supervised_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--hidden-dim", type=int, default=256)
+    parser.add_argument("--depth", type=int, default=6)
+    parser.add_argument("--backbone", type=str, default="edgeconv", choices=["edgeconv", "pointnet"])
+    parser.add_argument("--knn-k", type=int, default=16)
+    parser.add_argument("--geometry-only", action="store_true")
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
@@ -80,6 +94,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             knn_support_size=args.knn_support_size,
             knn_query_chunk=args.knn_query_chunk,
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
+            geometry_only=args.geometry_only,
         ),
     ),
     "range_unet": ModelSpec(
@@ -90,12 +105,12 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         add_train_args=add_range_unet_args,
         build_module=lambda args: RangeImageUNetSegmenter(
             num_classes=args.num_classes,
-            in_channels=4,
             base_channels=args.unet_base_channels,
             depth=args.unet_depth,
             dropout=args.unet_dropout,
             learning_rate=args.lr,
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
+            geometry_only=args.geometry_only,
         ),
     ),
     "range_diffusion": ModelSpec(
@@ -106,12 +121,12 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         add_train_args=add_range_diffusion_args,
         build_module=lambda args: RangeImageDiffusionSegmenter(
             num_classes=args.num_classes,
-            lidar_channels=4,
             base_channels=args.base_channels,
             learning_rate=args.lr,
             diffusion_steps=args.diffusion_steps,
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
             validation_prediction_mode=args.validation_prediction_mode,
+            geometry_only=args.geometry_only,
         ),
     ),
     "point_diffusion": ModelSpec(
@@ -131,6 +146,25 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             knn_k=args.knn_k,
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
             validation_prediction_mode=args.validation_prediction_mode,
+            geometry_only=args.geometry_only,
+        ),
+    ),
+    "point_supervised": ModelSpec(
+        model_id="point_supervised",
+        representation="point_clouds",
+        default_data_dir=Path("data/preprocessed/point_clouds"),
+        module_cls=PointCloudSupervisedSegmenter,
+        add_train_args=add_point_supervised_args,
+        build_module=lambda args: PointCloudSupervisedSegmenter(
+            num_classes=args.num_classes,
+            learning_rate=args.lr,
+            weight_decay=args.weight_decay,
+            hidden_dim=args.hidden_dim,
+            depth=args.depth,
+            backbone=args.backbone,
+            knn_k=args.knn_k,
+            use_balanced_class_weights=not bool(args.no_balanced_class_weights),
+            geometry_only=args.geometry_only,
         ),
     ),
 }

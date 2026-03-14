@@ -10,12 +10,14 @@ import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 import numpy as np
+import torch
 
 from src.data import WaymoLidarDataModule
 from src.main import run_evaluate, run_render, run_train
 from src.models import (
     LinearSVMPointClassifier,
     PointCloudDiffusionSegmenter,
+    PointCloudSupervisedSegmenter,
     RangeImageDiffusionSegmenter,
     RangeImageUNetSegmenter,
 )
@@ -87,6 +89,15 @@ class EndToEndSmokeTests(unittest.TestCase):
             (RangeImageUNetSegmenter(num_classes=23, base_channels=4, depth=2), self._range_dm()),
             (RangeImageDiffusionSegmenter(num_classes=23, base_channels=4, diffusion_steps=4), self._range_dm()),
             (
+                PointCloudSupervisedSegmenter(
+                    num_classes=23,
+                    hidden_dim=32,
+                    depth=2,
+                    backbone="pointnet",
+                ),
+                self._point_dm(),
+            ),
+            (
                 PointCloudDiffusionSegmenter(
                     num_classes=23,
                     hidden_dim=32,
@@ -101,6 +112,25 @@ class EndToEndSmokeTests(unittest.TestCase):
             ckpt_path = _fit_and_save(model, datamodule, self.base_dir / f"fit_{idx}")
             loaded = model.__class__.load_from_checkpoint(str(ckpt_path))
             self.assertIsInstance(loaded, model.__class__)
+
+    def test_point_diffusion_loads_legacy_checkpoint_without_geometry_only_hparam(self) -> None:
+        model = PointCloudDiffusionSegmenter(
+            num_classes=23,
+            hidden_dim=32,
+            depth=2,
+            diffusion_steps=4,
+            backbone="pointnet",
+            geometry_only=False,
+        )
+        ckpt_path = _fit_and_save(model, self._point_dm(), self.base_dir / "legacy_point_diffusion")
+        checkpoint = torch.load(ckpt_path, map_location="cpu")
+        checkpoint["hyper_parameters"].pop("geometry_only", None)
+        legacy_ckpt_path = self.base_dir / "legacy_point_diffusion.ckpt"
+        torch.save(checkpoint, legacy_ckpt_path)
+
+        loaded = PointCloudDiffusionSegmenter.load_from_checkpoint(str(legacy_ckpt_path))
+        self.assertIsInstance(loaded, PointCloudDiffusionSegmenter)
+        self.assertTrue(loaded.geometry_only_enabled)
 
     def test_render_smoke_for_point_and_range_models(self) -> None:
         point_ckpt = _fit_and_save(

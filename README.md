@@ -4,6 +4,7 @@ This repository exposes one package and one CLI for all supported LiDAR semantic
 
 ## Models
 - `point_svm`: point-cloud baseline using handcrafted local geometry features plus a linear SVM-style head
+- `point_supervised`: supervised point-cloud model with `edgeconv` or `pointnet` backbone
 - `range_unet`: supervised range-image U-Net
 - `range_diffusion`: diffusion model in range-image space
 - `point_diffusion`: diffusion model in point-cloud space with `edgeconv` or `pointnet` backbone
@@ -53,16 +54,20 @@ Representation-specific behavior:
 - range-image models consume `range_frame` and project predictions onto the paired dense point cloud in `point_frame`
 - diffusion models denoise internally; when `sampling_steps` is omitted they use the model's trained diffusion schedule
 - non-diffusion models ignore `sampling_steps`
+- `--geometry-only` drops non-geometry inputs:
+  - point-cloud models use `xyz` instead of `xyz + point_features`
+  - range-image models use `range` instead of all 4 channels
 
 ## CLI
 Train:
 
 ```bash
 python -m src.main train --model point_svm
+python -m src.main train --model point_supervised --backbone edgeconv
 python -m src.main train --model range_unet
 python -m src.main train --model range_diffusion --diffusion-steps 200 --validation-prediction-mode cheap
 python -m src.main train --model point_diffusion --backbone edgeconv --diffusion-steps 200 --validation-prediction-mode full
-python -m src.main train --model point_svm --no-auto-evaluate
+python -m src.main train --model point_svm --geometry-only --no-auto-evaluate
 ```
 
 Evaluate:
@@ -70,6 +75,7 @@ Evaluate:
 ```bash
 python -m src.main evaluate --model range_unet --checkpoint output/range_unet/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
+python -m src.main evaluate --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt --splits train,val,test
 python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --splits val --max-batches 4 --sampling-steps 5
 ```
@@ -79,6 +85,7 @@ Render:
 ```bash
 python -m src.main render --model range_diffusion --checkpoint output/range_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
 python -m src.main render --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt
+python -m src.main render --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
 ```
 
 Common options:
@@ -89,6 +96,7 @@ Common options:
 - `--output-dir`: training/evaluation output root
 - `--auto-evaluate` / `--no-auto-evaluate`: control whether training automatically runs the final checkpoint report pass
 - diffusion models also accept `--validation-prediction-mode cheap|full`
+- all trainable model families accept `--geometry-only`
 
 Important behavior:
 - dataset representation is inferred from `--model`

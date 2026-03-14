@@ -5,6 +5,7 @@ import torch.nn as nn
 
 from .base import PointCloudSegmentationModel
 from .features import MultiScaleKnnEigenFeatureExtractor
+from .inputs import select_point_features_for_extractor
 
 
 def multiclass_hinge_loss(
@@ -87,6 +88,7 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
         knn_support_size: int = 16384,
         knn_query_chunk: int = 4096,
         use_balanced_class_weights: bool = True,
+        geometry_only: bool = False,
     ) -> None:
         super().__init__(num_classes=num_classes, use_balanced_class_weights=use_balanced_class_weights)
         self.save_hyperparameters()
@@ -107,6 +109,10 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
         *,
         update_running: bool = False,
     ) -> torch.Tensor:
+        point_features = select_point_features_for_extractor(
+            point_features,
+            geometry_only=bool(self.hparams.geometry_only),
+        )
         features = self.feature_extractor(points, point_features, valid_geometry)
         features = self.feature_standardizer(features, valid_geometry, update_running=update_running)
         return self.classifier(features)

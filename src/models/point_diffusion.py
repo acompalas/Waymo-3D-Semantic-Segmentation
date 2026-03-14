@@ -1,139 +1,23 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from .base import PointCloudSegmentationModel
 from .diffusion import DDPM, labels_to_soft_points
+from .inputs import point_geometry, point_input_dim, select_point_model_inputs
+from .point_backbones import build_point_backbone
 
 
-class SinusoidalTimeEmbedding(nn.Module):
-    def __init__(self, dim: int) -> None:
-        super().__init__()
-        self.dim = int(dim)
-
-    def forward(self, t: torch.Tensor) -> torch.Tensor:
-        t = t.reshape(-1).float()
-        half = self.dim // 2
-        freqs = torch.exp(
-            -torch.log(torch.tensor(10000.0, device=t.device))
-            * torch.arange(0, half, device=t.device).float()
-            / max(half - 1, 1)
-        )
-        args = t[:, None] * freqs[None, :]
-        emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
-        return F.pad(emb, (0, 1)) if self.dim % 2 == 1 else emb
+def _resolve_point_geometry_only(geometry_only: bool | None) -> bool:
+    return True if geometry_only is None else bool(geometry_only)
 
 
-def knn_indices(xyz: torch.Tensor, k: int) -> torch.Tensor:
-    bsz, npts, _ = xyz.shape
-    if npts <= 1:
-        return torch.zeros((bsz, npts, 1), dtype=torch.long, device=xyz.device)
-
-    k_eff = max(1, min(k, npts - 1))
-    dist = torch.cdist(xyz, xyz)
-    eye = torch.eye(npts, dtype=torch.bool, device=xyz.device)[None, :, :]
-    dist = dist.masked_fill(eye, float("inf"))
-    return dist.topk(k=k_eff, dim=-1, largest=False).indices
-
-
-class EdgeConvBlock(nn.Module):
-    def __init__(self, dim: int, time_dim: int, dropout: float = 0.1) -> None:
-        super().__init__()
-        self.edge_mlp = nn.Sequential(
-            nn.LayerNorm(dim * 2 + 3),
-            nn.Linear(dim * 2 + 3, dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(dim, dim),
-            nn.SiLU(),
-        )
-        self.post = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, dim),
-            nn.SiLU(),
-            nn.Dropout(dropout),
-            nn.Linear(dim, dim),
-        )
-        self.t_proj = nn.Linear(time_dim, dim)
-
-    def forward(self, x: torch.Tensor, xyz: torch.Tensor, knn_idx: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
-        bsz, npts, dim = x.shape
-        _, _, k = knn_idx.shape
-        batch_idx = torch.arange(bsz, device=x.device)[:, None, None]
-        x_j = x[batch_idx, knn_idx]
-        xyz_j = xyz[batch_idx, knn_idx]
-        x_i = x[:, :, None, :].expand(bsz, npts, k, dim)
-        xyz_i = xyz[:, :, None, :].expand(bsz, npts, k, 3)
-        edge_feat = torch.cat([x_i, x_j - x_i, xyz_j - xyz_i], dim=-1)
-        edge_feat = self.edge_mlp(edge_feat)
-        agg = edge_feat.max(dim=2).values
-        h = self.post(agg) + self.t_proj(t_emb)[:, None, :]
-        return x + h
-
-
-class ResMLPBlock(nn.Module):
-    def __init__(self, dim: int, time_dim: int, dropout: float = 0.1) -> None:
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
-        self.fc1 = nn.Linear(dim, dim)
-        self.norm2 = nn.LayerNorm(dim)
-        self.fc2 = nn.Linear(dim, dim)
-        self.t_proj = nn.Linear(time_dim, dim)
-        self.drop = nn.Dropout(dropout)
-
-    def forward(self, x: torch.Tensor, t_emb: torch.Tensor) -> torch.Tensor:
-        h = self.fc1(F.silu(self.norm1(x)))
-        h = h + self.t_proj(t_emb)[:, None, :]
-        h = self.fc2(self.drop(F.silu(self.norm2(h))))
-        return x + h
-
-
-class PointDiffusionDenoiserPointNet(nn.Module):
+class PointDiffusionDenoiser(nn.Module):
     def __init__(
         self,
+        *,
+        backbone: str = "edgeconv",
         num_classes: int = 23,
-        point_dim: int = 3,
-        hidden_dim: int = 256,
-        depth: int = 6,
-        time_dim: int = 128,
-        dropout: float = 0.1,
-    ) -> None:
-        super().__init__()
-        self.time_embed = nn.Sequential(
-            SinusoidalTimeEmbedding(time_dim),
-            nn.Linear(time_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-        self.in_proj = nn.Linear(num_classes + point_dim, hidden_dim)
-        self.blocks = nn.ModuleList([ResMLPBlock(hidden_dim, hidden_dim, dropout=dropout) for _ in range(depth)])
-        self.global_proj = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-        self.out_proj = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, num_classes),
-        )
-
-    def forward(self, x_t: torch.Tensor, t: torch.Tensor, xyz: torch.Tensor) -> torch.Tensor:
-        t_emb = self.time_embed(t)
-        x = self.in_proj(torch.cat([x_t, xyz], dim=-1))
-        for block in self.blocks:
-            x = block(x, t_emb)
-        x = x + self.global_proj(x.max(dim=1).values)[:, None, :]
-        return self.out_proj(x)
-
-
-class PointDiffusionDenoiserEdgeConv(nn.Module):
-    def __init__(
-        self,
-        num_classes: int = 23,
-        point_dim: int = 3,
+        point_input_dim_value: int = 3,
         hidden_dim: int = 256,
         depth: int = 6,
         time_dim: int = 128,
@@ -141,68 +25,31 @@ class PointDiffusionDenoiserEdgeConv(nn.Module):
         knn_k: int = 16,
     ) -> None:
         super().__init__()
-        self.knn_k = int(knn_k)
-        self.time_embed = nn.Sequential(
-            SinusoidalTimeEmbedding(time_dim),
-            nn.Linear(time_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-        )
-        self.in_proj = nn.Linear(num_classes + point_dim, hidden_dim)
-        self.blocks = nn.ModuleList([EdgeConvBlock(hidden_dim, hidden_dim, dropout=dropout) for _ in range(depth)])
-        self.global_proj = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+        self.backbone_name = str(backbone).lower()
+        self.backbone = build_point_backbone(
+            self.backbone_name,
+            input_dim=int(num_classes) + int(point_input_dim_value),
+            hidden_dim=int(hidden_dim),
+            depth=int(depth),
+            dropout=float(dropout),
+            knn_k=int(knn_k),
+            time_dim=int(time_dim),
         )
         self.out_proj = nn.Sequential(
-            nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(self.backbone.output_dim),
+            nn.Linear(self.backbone.output_dim, self.backbone.output_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, num_classes),
+            nn.Linear(self.backbone.output_dim, int(num_classes)),
         )
 
-    def forward(self, x_t: torch.Tensor, t: torch.Tensor, xyz: torch.Tensor) -> torch.Tensor:
-        t_emb = self.time_embed(t)
-        x = self.in_proj(torch.cat([x_t, xyz], dim=-1))
-        knn_idx = knn_indices(xyz, self.knn_k)
-        for block in self.blocks:
-            x = block(x, xyz, knn_idx, t_emb)
-        x = x + self.global_proj(x.max(dim=1).values)[:, None, :]
-        return self.out_proj(x)
-
-
-def build_denoiser(
-    backbone: str = "edgeconv",
-    num_classes: int = 23,
-    point_dim: int = 3,
-    hidden_dim: int = 256,
-    depth: int = 6,
-    time_dim: int = 128,
-    dropout: float = 0.1,
-    knn_k: int = 16,
-) -> nn.Module:
-    if backbone == "pointnet":
-        return PointDiffusionDenoiserPointNet(
-            num_classes=num_classes,
-            point_dim=point_dim,
-            hidden_dim=hidden_dim,
-            depth=depth,
-            time_dim=time_dim,
-            dropout=dropout,
-        )
-    if backbone == "edgeconv":
-        return PointDiffusionDenoiserEdgeConv(
-            num_classes=num_classes,
-            point_dim=point_dim,
-            hidden_dim=hidden_dim,
-            depth=depth,
-            time_dim=time_dim,
-            dropout=dropout,
-            knn_k=knn_k,
-        )
-    raise ValueError(f"Unsupported backbone '{backbone}'. Choose from: pointnet, edgeconv.")
+    def forward(self, x_t: torch.Tensor, t: torch.Tensor, model_inputs: torch.Tensor) -> torch.Tensor:
+        features = torch.cat([x_t, model_inputs], dim=-1)
+        xyz = point_geometry(model_inputs)
+        if self.backbone_name == "edgeconv":
+            hidden = self.backbone(features, xyz, t=t)
+        else:
+            hidden = self.backbone(features, t=t)
+        return self.out_proj(hidden)
 
 
 class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
@@ -218,24 +65,38 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         knn_k: int = 16,
         use_balanced_class_weights: bool = True,
         validation_prediction_mode: str = "cheap",
+        geometry_only: bool | None = None,
     ) -> None:
         super().__init__(
             num_classes=num_classes,
             use_balanced_class_weights=use_balanced_class_weights,
             validation_prediction_mode=validation_prediction_mode,
         )
+        effective_geometry_only = _resolve_point_geometry_only(geometry_only)
         self.save_hyperparameters()
-        self.model = build_denoiser(
+        self.model = PointDiffusionDenoiser(
             backbone=str(backbone),
             num_classes=int(num_classes),
+            point_input_dim_value=point_input_dim(geometry_only=effective_geometry_only),
             hidden_dim=int(hidden_dim),
             depth=int(depth),
             knn_k=int(knn_k),
         )
         self.ddpm = DDPM(T=int(diffusion_steps))
 
+    @property
+    def geometry_only_enabled(self) -> bool:
+        return _resolve_point_geometry_only(self.hparams.geometry_only)
+
     def prepare_runtime(self) -> None:
         self.ddpm.to(self.device)
+
+    def _model_inputs(self, points: torch.Tensor, point_features: torch.Tensor) -> torch.Tensor:
+        return select_point_model_inputs(
+            points,
+            point_features,
+            geometry_only=self.geometry_only_enabled,
+        )
 
     def predict_point_labels(
         self,
@@ -245,10 +106,10 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         *,
         sampling_steps: int | None = None,
     ) -> torch.Tensor:
-        _ = point_features
+        model_inputs = self._model_inputs(points, point_features)
         x0 = self.ddpm.sample(
             self.model,
-            points,
+            model_inputs,
             sample_shape=(points.shape[0], points.shape[1], int(self.hparams.num_classes)),
             steps=sampling_steps,
         )
@@ -257,14 +118,14 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
 
     def _evaluation_loss(
         self,
-        points: torch.Tensor,
+        model_inputs: torch.Tensor,
         labels: torch.Tensor,
         valid_geometry: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
-        t = torch.ones(points.shape[0], device=self.device, dtype=torch.long)
+        t = torch.ones(model_inputs.shape[0], device=self.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
-        eps_pred = self.model(x_t, t, points)
+        eps_pred = self.model(x_t, t, model_inputs)
         loss = self.ddpm.loss(eps_pred, eps, valid_geometry, labels=labels, class_weights=None, class_dim=2)
         sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
         sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
@@ -273,14 +134,14 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
 
     def _training_loss_and_predictions(
         self,
-        points: torch.Tensor,
+        model_inputs: torch.Tensor,
         labels: torch.Tensor,
         valid_geometry: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
-        t = torch.randint(1, self.ddpm.T + 1, (points.shape[0],), device=self.device, dtype=torch.long)
+        t = torch.randint(1, self.ddpm.T + 1, (model_inputs.shape[0],), device=self.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
-        eps_pred = self.model(x_t, t, points)
+        eps_pred = self.model(x_t, t, model_inputs)
         loss = self.ddpm.loss(eps_pred, eps, valid_geometry, labels=labels, class_weights=self.class_weights, class_dim=2)
         sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
         sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
@@ -297,23 +158,25 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
     ) -> dict:
         _ = stage
         points = batch["points"].float()
+        point_features = batch["point_features"].float()
         labels = batch["labels"].long()
         valid_geometry = batch["valid_geometry"].bool()
         valid_label = batch["valid_label"].bool()
         batch_size = int(points.shape[0])
+        model_inputs = self._model_inputs(points, point_features)
         if evaluation:
-            loss, cheap_preds = self._evaluation_loss(points, labels, valid_geometry)
+            loss, cheap_preds = self._evaluation_loss(model_inputs, labels, valid_geometry)
             if prediction_mode == "full":
                 preds = self.predict_point_labels(
                     points,
-                    batch["point_features"].float(),
+                    point_features,
                     valid_geometry,
                     sampling_steps=self.resolve_sampling_steps(),
                 )
             else:
                 preds = torch.where(valid_geometry, cheap_preds, torch.zeros_like(cheap_preds))
         else:
-            loss, preds = self._training_loss_and_predictions(points, labels, valid_geometry)
+            loss, preds = self._training_loss_and_predictions(model_inputs, labels, valid_geometry)
 
         metric_mask = valid_geometry & valid_label & (labels > 0)
         return {

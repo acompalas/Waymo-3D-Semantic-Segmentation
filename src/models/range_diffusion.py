@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from .base import RangeImageSegmentationModel
 from .diffusion import DDPM, labels_to_soft_range
+from .inputs import range_input_channels, select_range_model_inputs
 
 
 def norm_2d(channels: int) -> nn.GroupNorm:
@@ -260,18 +261,20 @@ class RangeImageDiffusionSegmenter(RangeImageSegmentationModel):
     def __init__(
         self,
         num_classes: int = 23,
-        lidar_channels: int = 4,
+        lidar_channels: int | None = None,
         base_channels: int = 32,
         learning_rate: float = 2e-4,
         diffusion_steps: int = 1000,
         use_balanced_class_weights: bool = True,
         validation_prediction_mode: str = "cheap",
+        geometry_only: bool = False,
     ) -> None:
         super().__init__(
             num_classes=num_classes,
             use_balanced_class_weights=use_balanced_class_weights,
             validation_prediction_mode=validation_prediction_mode,
         )
+        lidar_channels = range_input_channels(geometry_only=bool(geometry_only)) if lidar_channels is None else int(lidar_channels)
         self.save_hyperparameters()
         self.model = LiDARDiffusionUNet(
             num_classes=int(num_classes),
@@ -284,9 +287,11 @@ class RangeImageDiffusionSegmenter(RangeImageSegmentationModel):
         self.ddpm.to(self.device)
 
     def prepare_batch(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        x = batch["range_images"].float()
+        x = select_range_model_inputs(batch["range_images"], geometry_only=bool(self.hparams.geometry_only))
         labels = batch["semantic"].long()
         valid = batch["valid_label"].bool()
+        if x.ndim != 5 or x.shape[-1] != int(self.hparams.lidar_channels):
+            raise ValueError(f"Expected selected range input shape [B,R,H,W,{int(self.hparams.lidar_channels)}], got {tuple(x.shape)}")
         bsz, returns, height, width, channels = x.shape
         cond = x.permute(0, 1, 4, 2, 3).reshape(bsz * returns, channels, height, width)
         labels = labels.reshape(bsz * returns, height, width)
