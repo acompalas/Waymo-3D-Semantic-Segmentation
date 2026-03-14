@@ -317,6 +317,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 data_dir=self.point_root,
                 test_subdirs="validation",
                 splits="test",
+                max_batches=1,
                 batch_size=1,
                 num_points=8,
                 num_classes=23,

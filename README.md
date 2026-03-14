@@ -71,6 +71,7 @@ Evaluate:
 python -m src.main evaluate --model range_unet --checkpoint output/range_unet/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
 python -m src.main evaluate --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt --splits train,val,test
+python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --splits val --max-batches 4 --sampling-steps 5
 ```
 
 Render:
@@ -84,6 +85,7 @@ Common options:
 - `--data-dir`: override the model’s default preprocessed root
 - `--train-subdirs`, `--val-subdirs`, `--test-subdirs`: choose source subsets from `segment_source.json`
 - `--batch-size`, `--num-points`, `--num-workers`, `--seed`
+- `--max-batches`: cap evaluation to the first N batches of each requested split; `0` means no limit
 - `--output-dir`: training/evaluation output root
 - `--auto-evaluate` / `--no-auto-evaluate`: control whether training automatically runs the final checkpoint report pass
 - diffusion models also accept `--validation-prediction-mode cheap|full`

@@ -45,7 +45,7 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--train-subdirs", type=str, default="training")
     parser.add_argument("--val-subdirs", type=str, default="")
     parser.add_argument("--test-subdirs", type=str, default="validation")
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-points", type=int, default=16384)
     parser.add_argument("--num-classes", type=int, default=23)
     parser.add_argument("--val-fraction", type=float, default=0.1)
@@ -73,7 +73,8 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--test-subdirs", type=str, default="validation")
     parser.add_argument("--splits", type=str, default="test")
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--max-batches", type=int, default=0)
+    parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-points", type=int, default=16384)
     parser.add_argument("--num-classes", type=int, default=23)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -235,7 +236,13 @@ def run_evaluate(args: argparse.Namespace) -> None:
     setup_datamodule_for_report(datamodule, requested_splits)
     report_device = resolve_runtime_device(args.accelerator)
     prepare_model_for_reporting(model, datamodule, report_device)
-    stage_reports = collect_stage_reports(model, datamodule, splits=requested_splits, device=report_device)
+    stage_reports = collect_stage_reports(
+        model,
+        datamodule,
+        splits=requested_splits,
+        device=report_device,
+        max_batches=args.max_batches,
+    )
     write_report_bundle(
         spec=spec,
         checkpoint_path=Path(args.checkpoint),

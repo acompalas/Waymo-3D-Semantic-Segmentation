@@ -56,10 +56,13 @@ class RegistryCliTests(unittest.TestCase):
                 "fake.ckpt",
                 "--splits",
                 "train,val,test",
+                "--max-batches",
+                "3",
             ]
         )
         self.assertEqual(args.command, "evaluate")
         self.assertEqual(args.splits, "train,val,test")
+        self.assertEqual(args.max_batches, 3)
 
 
 if __name__ == "__main__":

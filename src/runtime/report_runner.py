@@ -1,8 +1,10 @@
 from pathlib import Path
+import sys
 from typing import Iterable
 
 from lightning.pytorch.loggers import CSVLogger
 import torch
+from tqdm.auto import tqdm
 
 from ..data import WaymoLidarDataModule
 from .reporting import write_stage_report_bundle
@@ -66,11 +68,37 @@ def setup_datamodule_for_report(datamodule: WaymoLidarDataModule, splits: Iterab
         datamodule.setup("test")
 
 
-def evaluate_split(model, datamodule: WaymoLidarDataModule, *, split: str, device: torch.device) -> dict:
+def _progress_batches(loader, *, split: str):
+    total = None
+    try:
+        total = len(loader)
+    except TypeError:
+        total = None
+    return tqdm(
+        loader,
+        total=total,
+        desc=f"Evaluating {split}",
+        unit="batch",
+        leave=True,
+        disable=not sys.stderr.isatty(),
+    )
+
+
+def evaluate_split(
+    model,
+    datamodule: WaymoLidarDataModule,
+    *,
+    split: str,
+    device: torch.device,
+    max_batches: int = 0,
+) -> dict:
     loader = datamodule.report_dataloader(split)
     accumulator = StageReportAccumulator(split, num_classes=int(model.hparams.num_classes))
+    batch_limit = max(0, int(max_batches))
     with torch.no_grad():
-        for batch in loader:
+        for batch_idx, batch in enumerate(_progress_batches(loader, split=split)):
+            if batch_limit and batch_idx >= batch_limit:
+                break
             stage_output = model.compute_stage_output(
                 move_batch_to_device(batch, device),
                 stage=split,
@@ -81,9 +109,16 @@ def evaluate_split(model, datamodule: WaymoLidarDataModule, *, split: str, devic
     return accumulator.summary()
 
 
-def collect_stage_reports(model, datamodule: WaymoLidarDataModule, *, splits: Iterable[str], device: torch.device) -> dict[str, dict]:
+def collect_stage_reports(
+    model,
+    datamodule: WaymoLidarDataModule,
+    *,
+    splits: Iterable[str],
+    device: torch.device,
+    max_batches: int = 0,
+) -> dict[str, dict]:
     return {
-        stage: evaluate_split(model, datamodule, split=stage, device=device)
+        stage: evaluate_split(model, datamodule, split=stage, device=device, max_batches=max_batches)
         for stage in splits
     }
 
