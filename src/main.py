@@ -265,6 +265,25 @@ def _choose_segment(args: argparse.Namespace, datasets: list) -> str:
     return str(rng.choice(np.asarray(available, dtype=object)))
 
 
+def _sampled_point_frame(
+    dataset: PreprocessedPointCloudDataset,
+    *,
+    segment: str,
+    timestamp: int,
+) -> dict:
+    frame_idx = dataset.resolve_frame_index(segment, timestamp)
+    sampled = dataset[frame_idx]
+    return {
+        "xyz": sampled["points"].detach().cpu().numpy().astype(np.float32, copy=False),
+        "point_features": sampled["point_features"].detach().cpu().numpy().astype(np.float32, copy=False),
+        "labels": sampled["labels"].detach().cpu().numpy().astype(np.int64, copy=False),
+        "valid_geometry": sampled["valid_geometry"].detach().cpu().numpy().astype(bool, copy=False),
+        "valid_label": sampled["valid_label"].detach().cpu().numpy().astype(bool, copy=False),
+        "segment_context_name": str(sampled["segment_context_name"]),
+        "frame_timestamp_micros": int(sampled["frame_timestamp_micros"]),
+    }
+
+
 def run_render(args: argparse.Namespace) -> None:
     spec = get_model_spec(args.model)
     device = resolve_device(args.device)
@@ -298,7 +317,10 @@ def run_render(args: argparse.Namespace) -> None:
 
     rendered_frames: list[np.ndarray] = []
     for _, (_, timestamp) in enumerate(frames):
-        point_frame = point_dataset.get_dense_frame(segment, timestamp)
+        if spec.representation == "point_clouds":
+            point_frame = _sampled_point_frame(point_dataset, segment=segment, timestamp=timestamp)
+        else:
+            point_frame = point_dataset.get_dense_frame(segment, timestamp)
         range_frame = range_dataset.get_frame_data(segment, timestamp) if range_dataset is not None else None
         prediction = model.predict_segmented_pointcloud(
             point_frame=point_frame,

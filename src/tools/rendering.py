@@ -84,8 +84,10 @@ def save_gif(frames_rgb: list[np.ndarray], output_path: Path, fps: float) -> Non
 def ensure_open3d_linux_env() -> None:
     if not sys.platform.startswith("linux"):
         return
-    os.environ.setdefault("GDK_BACKEND", "x11")
-    os.environ.setdefault("XDG_SESSION_TYPE", "x11")
+    os.environ["GDK_BACKEND"] = "x11"
+    os.environ["XDG_SESSION_TYPE"] = "x11"
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    os.environ.pop("WAYLAND_DISPLAY", None)
 
 
 def render_point_cloud(
@@ -105,8 +107,20 @@ def render_point_cloud(
     pcd.colors = o3d.utility.Vector3dVector(colors.astype(np.float64))
 
     vis = o3d.visualization.Visualizer()
-    vis.create_window(visible=False, width=int(width), height=int(height))
+    created = vis.create_window(visible=False, width=int(width), height=int(height))
+    if not bool(created):
+        vis.destroy_window()
+        raise RuntimeError(
+            "Open3D failed to create a rendering window. On Linux this usually means no usable X11/OpenGL "
+            "context is available for offscreen rendering."
+        )
     opt = vis.get_render_option()
+    if opt is None:
+        vis.destroy_window()
+        raise RuntimeError(
+            "Open3D created a window but did not provide render options. This usually indicates the OpenGL "
+            "context failed to initialize."
+        )
     opt.background_color = np.array([0.12, 0.14, 0.16], dtype=np.float64)
     opt.point_size = float(point_size)
     vis.add_geometry(pcd)

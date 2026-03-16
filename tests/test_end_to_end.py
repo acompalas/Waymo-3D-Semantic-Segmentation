@@ -245,6 +245,58 @@ class EndToEndSmokeTests(unittest.TestCase):
 
         self.assertEqual(calls, [(True, False)])
 
+    def test_run_render_limits_point_model_inputs_to_render_num_points(self) -> None:
+        point_ckpt = _fit_and_save(
+            LinearSVMPointClassifier(num_classes=23, knn_scales=(2,), knn_support_size=8, knn_query_chunk=8),
+            self._point_dm(),
+            self.base_dir / "render_point_limit",
+        )
+
+        observed_point_count: list[int] = []
+
+        def fake_predict_segmented_pointcloud(*, point_frame, range_frame=None, sampling_steps=None):
+            _ = range_frame
+            _ = sampling_steps
+            observed_point_count.append(int(point_frame["xyz"].reshape(-1, 3).shape[0]))
+            valid_geometry = point_frame["valid_geometry"].reshape(-1).astype(bool, copy=False)
+            return {
+                "points_xyz": point_frame["xyz"].reshape(-1, 3)[valid_geometry].astype(np.float32, copy=False),
+                "pred_labels": point_frame["labels"].reshape(-1)[valid_geometry].astype(np.int64, copy=False),
+                "true_labels": point_frame["labels"].reshape(-1)[valid_geometry].astype(np.int64, copy=False),
+                "valid_label": point_frame["valid_label"].reshape(-1)[valid_geometry].astype(bool, copy=False),
+            }
+
+        fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
+        with patch("src.main.render_point_cloud", return_value=fake_frame), patch.object(
+            LinearSVMPointClassifier,
+            "predict_segmented_pointcloud",
+            side_effect=fake_predict_segmented_pointcloud,
+        ):
+            run_render(
+                argparse.Namespace(
+                    command="render",
+                    model="point_svm",
+                    checkpoint=point_ckpt,
+                    data_dir=self.point_root,
+                    point_data_dir=self.point_root,
+                    source_subdirs="validation",
+                    segment="segment_val",
+                    seed=0,
+                    sampling_steps=None,
+                    render_num_points=5,
+                    output_gif=self.base_dir / "point_limit.gif",
+                    fps=2.0,
+                    max_frames=1,
+                    camera_preset="car_pov",
+                    width=32,
+                    height=32,
+                    point_size=1.0,
+                    device="cpu",
+                )
+            )
+
+        self.assertEqual(observed_point_count, [5])
+
     def test_train_writes_final_report_artifacts_and_uses_checkpoint_reload(self) -> None:
         output_dir = self.base_dir / "train_outputs"
         spec = get_model_spec("point_svm")
@@ -369,14 +421,22 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertTrue((output_dir / "test_confusion_raw.png").exists())
         self.assertTrue((output_dir / "test_confusion_normalized.png").exists())
 
-    def test_linux_open3d_environment_defaults_are_applied(self) -> None:
-        previous_gdk = os.environ.pop("GDK_BACKEND", None)
-        previous_session = os.environ.pop("XDG_SESSION_TYPE", None)
+    def test_linux_open3d_environment_forces_x11(self) -> None:
+        previous_gdk = os.environ.get("GDK_BACKEND")
+        previous_session = os.environ.get("XDG_SESSION_TYPE")
+        previous_qt = os.environ.get("QT_QPA_PLATFORM")
+        previous_wayland = os.environ.get("WAYLAND_DISPLAY")
+        os.environ["GDK_BACKEND"] = "wayland"
+        os.environ["XDG_SESSION_TYPE"] = "wayland"
+        os.environ["QT_QPA_PLATFORM"] = "wayland"
+        os.environ["WAYLAND_DISPLAY"] = "wayland-0"
         try:
             with patch("src.tools.rendering.sys.platform", "linux"):
                 ensure_open3d_linux_env()
             self.assertEqual(os.environ["GDK_BACKEND"], "x11")
             self.assertEqual(os.environ["XDG_SESSION_TYPE"], "x11")
+            self.assertEqual(os.environ["QT_QPA_PLATFORM"], "xcb")
+            self.assertNotIn("WAYLAND_DISPLAY", os.environ)
         finally:
             if previous_gdk is None:
                 os.environ.pop("GDK_BACKEND", None)
@@ -386,6 +446,14 @@ class EndToEndSmokeTests(unittest.TestCase):
                 os.environ.pop("XDG_SESSION_TYPE", None)
             else:
                 os.environ["XDG_SESSION_TYPE"] = previous_session
+            if previous_qt is None:
+                os.environ.pop("QT_QPA_PLATFORM", None)
+            else:
+                os.environ["QT_QPA_PLATFORM"] = previous_qt
+            if previous_wayland is None:
+                os.environ.pop("WAYLAND_DISPLAY", None)
+            else:
+                os.environ["WAYLAND_DISPLAY"] = previous_wayland
 
 
 if __name__ == "__main__":
