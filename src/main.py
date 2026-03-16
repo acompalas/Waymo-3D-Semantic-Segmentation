@@ -68,6 +68,7 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
     parser.add_argument("--geometry-only", action="store_true")
+    parser.add_argument("--val-samples-per-segment", type=int, default=None)
     parser.add_argument("--auto-evaluate", dest="auto_evaluate", action="store_true")
     parser.add_argument("--no-auto-evaluate", dest="auto_evaluate", action="store_false")
     parser.set_defaults(auto_evaluate=True)
@@ -85,7 +86,6 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--worker-start-method", type=str, default="spawn")
     parser.add_argument("--max-cached-segments", type=int, default=2)
-    parser.add_argument("--sampling-steps", type=int, default=None)
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=str, default="auto")
     parser.add_argument("--precision", type=str, default="32")
@@ -100,7 +100,6 @@ def add_common_render_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source-subdirs", type=str, default="validation")
     parser.add_argument("--segment", type=str, default=None)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--sampling-steps", type=int, default=None)
     parser.add_argument("--render-num-points", type=int, default=16384)
     parser.add_argument("--output-gif", type=Path, default=Path("output/render/predictions.gif"))
     parser.add_argument("--fps", type=float, default=5.0)
@@ -181,6 +180,9 @@ def data_dir_for(args: argparse.Namespace) -> Path:
 
 def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
     selection = selection_for(args)
+    val_samples_per_segment = getattr(args, "val_samples_per_segment", None)
+    if val_samples_per_segment is None:
+        val_samples_per_segment = 1 if selection.behavior == "diffusion" else 0
     return WaymoLidarDataModule(
         data_dir=data_dir_for(args),
         representation=selection.representation,
@@ -197,6 +199,7 @@ def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
         worker_start_method=args.worker_start_method,
         balanced_weights=not bool(getattr(args, "no_balanced_class_weights", False)),
         train_segment_fraction=getattr(args, "train_segment_fraction", 1.0),
+        val_samples_per_segment=int(val_samples_per_segment),
     )
 
 
@@ -279,7 +282,6 @@ def run_evaluate(args: argparse.Namespace) -> None:
     datamodule = build_datamodule(args)
     model = selection.load_from_checkpoint(args.checkpoint)
     _validate_loaded_model_selection(model, selection)
-    model.set_sampling_steps(args.sampling_steps)
     requested_splits = parse_report_splits(args.splits)
     setup_datamodule_for_report(datamodule, requested_splits)
     report_device = resolve_runtime_device(args.accelerator)
@@ -337,7 +339,6 @@ def run_render(args: argparse.Namespace) -> None:
     model = selection.load_from_checkpoint(args.checkpoint).to(device)
     _validate_loaded_model_selection(model, selection)
     model.eval()
-    model.set_sampling_steps(args.sampling_steps)
 
     source_subdirs = args.source_subdirs
     point_dataset = PreprocessedPointCloudDataset(
@@ -373,7 +374,6 @@ def run_render(args: argparse.Namespace) -> None:
         prediction = model.predict_segmented_pointcloud(
             point_frame=point_frame,
             range_frame=range_frame,
-            sampling_steps=args.sampling_steps,
         )
 
         colors = label_colors(prediction["pred_labels"], valid_label=prediction["valid_label"])

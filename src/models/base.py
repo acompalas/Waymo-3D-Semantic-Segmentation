@@ -41,18 +41,16 @@ class SegmentationLightningModule(L.LightningModule):
         num_classes: int,
         *,
         use_balanced_class_weights: bool = True,
-        validation_prediction_mode: str = "full",
     ) -> None:
         super().__init__()
         self._metric_num_classes = int(num_classes)
         self._use_balanced_class_weights = bool(use_balanced_class_weights)
-        self._sampling_steps_override: int | None = None
-        self._validation_prediction_mode = str(validation_prediction_mode)
         self.register_buffer("_class_weights", torch.ones(self._metric_num_classes, dtype=torch.float32), persistent=False)
         self.register_buffer("_train_confmat", empty_confusion_matrix(self._metric_num_classes), persistent=False)
         self.register_buffer("_val_confmat", empty_confusion_matrix(self._metric_num_classes), persistent=False)
         self.register_buffer("_test_confmat", empty_confusion_matrix(self._metric_num_classes), persistent=False)
         self._weights_ready = False
+        self._stage_has_predictions = {"train": False, "val": False, "test": False}
 
     @property
     def class_weights(self) -> Optional[torch.Tensor]:
@@ -70,22 +68,12 @@ class SegmentationLightningModule(L.LightningModule):
         self._class_weights.copy_(class_weights)
         self._weights_ready = True
 
-    def set_sampling_steps(self, steps: int | None) -> None:
-        self._sampling_steps_override = None if steps is None else int(steps)
-
-    def resolve_sampling_steps(self, sampling_steps: int | None = None) -> int | None:
-        if sampling_steps is not None:
-            return int(sampling_steps)
-        return self._sampling_steps_override
-
     def prepare_runtime(self) -> None:
         return None
 
     def _resolve_prediction_mode(self, stage: str) -> str:
-        if stage == "train":
-            return "cheap"
-        if stage == "val":
-            return self._validation_prediction_mode
+        if stage in {"train", "val", "test"}:
+            return "full"
         return "full"
 
     def _confmat_for_stage(self, stage: str) -> torch.Tensor:
@@ -99,11 +87,14 @@ class SegmentationLightningModule(L.LightningModule):
 
     def reset_stage_metrics(self, stage: str) -> None:
         self._confmat_for_stage(stage).zero_()
+        self._stage_has_predictions[stage] = False
 
     def get_confusion_matrix(self, stage: str) -> torch.Tensor:
         return self._confmat_for_stage(stage).detach().clone()
 
     def _log_iou_metrics(self, stage: str) -> None:
+        if not self._stage_has_predictions[stage]:
+            return
         metrics = iou_metrics_from_confusion_matrix(self._confmat_for_stage(stage), ignore_class_zero=True)
         self.log(f"{stage}_mIoU", metrics["miou"], on_step=False, on_epoch=True, prog_bar=True)
         for cls_idx, cls_iou in enumerate(metrics["per_class_iou"]):
@@ -112,10 +103,12 @@ class SegmentationLightningModule(L.LightningModule):
     def _consume_and_log_stage_output(self, stage: str, output: dict[str, Any]) -> torch.Tensor:
         output = validate_stage_output(output)
         loss = output["loss"]
-        acc = consume_stage_output(self._confmat_for_stage(stage), output, num_classes=self._metric_num_classes)
         batch_size = max(1, int(output["batch_size"]))
         self.log(f"{stage}_loss", loss, on_step=(stage == "train"), on_epoch=True, prog_bar=True, batch_size=batch_size)
-        self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
+        acc = consume_stage_output(self._confmat_for_stage(stage), output, num_classes=self._metric_num_classes)
+        if acc is not None:
+            self._stage_has_predictions[stage] = True
+            self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
         return loss
 
     def _shared_stage_step(self, batch: dict[str, Any], stage: str) -> torch.Tensor:
@@ -213,7 +206,6 @@ class SegmentationLightningModule(L.LightningModule):
         *,
         point_frame: dict,
         range_frame: dict | None = None,
-        sampling_steps: int | None = None,
     ) -> dict:
         raise NotImplementedError
 
@@ -265,8 +257,6 @@ class PointCloudSegmentationModel(SegmentationLightningModule):
         points: torch.Tensor,
         point_features: torch.Tensor,
         valid_geometry: torch.Tensor,
-        *,
-        sampling_steps: int | None = None,
     ) -> torch.Tensor:
         raise NotImplementedError
 
@@ -275,7 +265,6 @@ class PointCloudSegmentationModel(SegmentationLightningModule):
         *,
         point_frame: dict,
         range_frame: dict | None = None,
-        sampling_steps: int | None = None,
     ) -> dict:
         _ = range_frame
         self.prepare_runtime()
@@ -284,7 +273,6 @@ class PointCloudSegmentationModel(SegmentationLightningModule):
             points,
             point_features,
             valid_geometry,
-            sampling_steps=self.resolve_sampling_steps(sampling_steps),
         ).squeeze(0).detach().cpu().numpy().astype(np.int64, copy=False)
         payload = {
             "points_xyz": points.squeeze(0).detach().cpu().numpy().astype(np.float32, copy=False),
@@ -314,7 +302,7 @@ class RangeImageSegmentationModel(SegmentationLightningModule):
             "valid_label": torch.from_numpy(range_frame["valid_label"]).unsqueeze(0).to(device=self.device),
         }
 
-    def predict_range_labels(self, batch: dict, *, sampling_steps: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def predict_range_labels(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
     def predict_segmented_pointcloud(
@@ -322,14 +310,13 @@ class RangeImageSegmentationModel(SegmentationLightningModule):
         *,
         point_frame: dict,
         range_frame: dict | None = None,
-        sampling_steps: int | None = None,
     ) -> dict:
         if range_frame is None:
             raise ValueError("range_frame is required for range-image models.")
 
         self.prepare_runtime()
         batch = self._build_range_batch(range_frame)
-        preds, labels = self.predict_range_labels(batch, sampling_steps=self.resolve_sampling_steps(sampling_steps))
+        preds, labels = self.predict_range_labels(batch)
         valid_geometry = self._resolve_point_valid_geometry(point_frame, point_frame["labels"].reshape(-1)).reshape(-1)
         valid_label = point_frame["valid_label"].reshape(-1).astype(bool, copy=False)
         points = point_frame["xyz"].reshape(-1, 3)[valid_geometry]

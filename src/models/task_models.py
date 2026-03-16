@@ -37,7 +37,6 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         knn_k: int = 16,
         dropout: float = 0.1,
         diffusion_steps: int = 1000,
-        validation_prediction_mode: str = "cheap",
         use_balanced_class_weights: bool = True,
         geometry_only: bool = False,
         knn_scales: tuple[int, ...] = (16, 32, 64),
@@ -50,7 +49,6 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         super().__init__(
             num_classes=num_classes,
             use_balanced_class_weights=use_balanced_class_weights,
-            validation_prediction_mode=validation_prediction_mode,
         )
         self.save_hyperparameters()
         self.behavior_impl = build_point_behavior(behavior, diffusion_steps=int(diffusion_steps))
@@ -100,15 +98,12 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         points: torch.Tensor,
         point_features: torch.Tensor,
         valid_geometry: torch.Tensor,
-        *,
-        sampling_steps: int | None = None,
     ) -> torch.Tensor:
         return self.behavior_impl.predict_point_labels(
             self,
             points,
             point_features,
             valid_geometry,
-            sampling_steps=sampling_steps,
         )
 
     def _compute_stage_output(
@@ -144,14 +139,12 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         depth: int = 4,
         dropout: float = 0.0,
         diffusion_steps: int = 1000,
-        validation_prediction_mode: str = "cheap",
         use_balanced_class_weights: bool = True,
         geometry_only: bool = False,
     ) -> None:
         super().__init__(
             num_classes=num_classes,
             use_balanced_class_weights=use_balanced_class_weights,
-            validation_prediction_mode=validation_prediction_mode,
         )
         input_channels = range_input_channels(geometry_only=bool(geometry_only))
         self.save_hyperparameters()
@@ -191,8 +184,8 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         hidden = self.backbone(x_t, cond=cond, t=t)
         return self.head(hidden)
 
-    def predict_range_labels(self, batch: dict, *, sampling_steps: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.behavior_impl.predict_range_labels(self, batch, sampling_steps=sampling_steps)
+    def predict_range_labels(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.behavior_impl.predict_range_labels(self, batch)
 
     def _compute_stage_output(
         self,

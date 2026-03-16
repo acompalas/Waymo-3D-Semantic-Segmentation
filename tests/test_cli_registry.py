@@ -24,6 +24,8 @@ class RegistryCliTests(unittest.TestCase):
                 "64",
                 "--proj-depth",
                 "2",
+                "--val-samples-per-segment",
+                "3",
                 "--geometry-only",
                 "--no-auto-evaluate",
             ]
@@ -35,6 +37,7 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(args.head, "mlp")
         self.assertEqual(args.proj_dim, 64)
         self.assertEqual(args.proj_depth, 2)
+        self.assertEqual(args.val_samples_per_segment, 3)
         self.assertTrue(args.geometry_only)
 
     def test_point_diffusion_parser_adds_behavior_args(self) -> None:
@@ -51,13 +54,10 @@ class RegistryCliTests(unittest.TestCase):
                 "mlp",
                 "--diffusion-steps",
                 "8",
-                "--validation-prediction-mode",
-                "full",
                 "--no-auto-evaluate",
             ]
         )
         self.assertEqual(args.diffusion_steps, 8)
-        self.assertEqual(args.validation_prediction_mode, "full")
 
     def test_range_render_parser_accepts_requested_components(self) -> None:
         args = parse_args(

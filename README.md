@@ -59,7 +59,6 @@ predict_segmented_pointcloud(
     *,
     point_frame: dict,
     range_frame: dict | None = None,
-    sampling_steps: int | None = None,
 ) -> dict
 ```
 
@@ -72,11 +71,15 @@ Returned keys:
 Representation-specific behavior:
 - point-cloud models consume `point_frame` directly
 - range-image models consume `range_frame` and project predictions onto the paired dense point cloud in `point_frame`
-- diffusion behaviors denoise internally; when `sampling_steps` is omitted they use the model's trained diffusion schedule
-- supervised behaviors ignore `sampling_steps`
+- diffusion behaviors denoise internally with the model's trained diffusion schedule
 - `--geometry-only` drops non-geometry inputs:
   - point-cloud models use `xyz` instead of `xyz + point_features`
   - range-image models use `range` instead of all 4 channels
+- `--val-samples-per-segment` controls deterministic validation subsampling during training:
+  - `0` uses the full validation split
+  - positive values cap validation frames per segment
+  - diffusion defaults to `1` when omitted
+  - supervised defaults to `0` when omitted
 
 ## CLI
 Train:

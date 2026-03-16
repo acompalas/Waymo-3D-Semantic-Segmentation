@@ -21,10 +21,7 @@ class PointSupervisedBehavior:
         points: torch.Tensor,
         point_features: torch.Tensor,
         valid_geometry: torch.Tensor,
-        *,
-        sampling_steps: int | None = None,
     ) -> torch.Tensor:
-        _ = sampling_steps
         logits = model.predict_logits(points, point_features)
         preds = logits.argmax(dim=-1)
         return torch.where(valid_geometry, preds, torch.zeros_like(preds))
@@ -101,40 +98,29 @@ class PointDiffusionBehavior:
         points: torch.Tensor,
         point_features: torch.Tensor,
         valid_geometry: torch.Tensor,
-        *,
-        sampling_steps: int | None = None,
     ) -> torch.Tensor:
         model_inputs = model.point_model_inputs(points, point_features)
         x0 = self.ddpm.sample(
             model.predict_diffusion_target,
             model_inputs,
             sample_shape=(points.shape[0], points.shape[1], int(model.hparams.num_classes)),
-            steps=sampling_steps,
         )
         preds = x0.argmax(dim=-1)
         return torch.where(valid_geometry, preds, torch.zeros_like(preds))
 
-    def _evaluation_loss(self, model, model_inputs: torch.Tensor, labels: torch.Tensor, valid_label: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _evaluation_loss(self, model, model_inputs: torch.Tensor, labels: torch.Tensor, valid_label: torch.Tensor) -> torch.Tensor:
         x0 = labels_to_soft_points(labels, int(model.hparams.num_classes), valid_label)
         t = torch.ones(model_inputs.shape[0], device=model.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
         eps_pred = model.predict_diffusion_target(x_t, t, model_inputs)
-        loss = self.ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=None, class_dim=2)
-        sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
-        sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
-        x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
-        return loss, x0_est.argmax(dim=-1)
+        return self.ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=None, class_dim=2)
 
-    def _training_loss_and_predictions(self, model, model_inputs: torch.Tensor, labels: torch.Tensor, valid_label: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _training_loss(self, model, model_inputs: torch.Tensor, labels: torch.Tensor, valid_label: torch.Tensor) -> torch.Tensor:
         x0 = labels_to_soft_points(labels, int(model.hparams.num_classes), valid_label)
         t = torch.randint(1, self.ddpm.T + 1, (model_inputs.shape[0],), device=model.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
         eps_pred = model.predict_diffusion_target(x_t, t, model_inputs)
-        loss = self.ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=model.class_weights, class_dim=2)
-        sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
-        sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
-        x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
-        return loss, x0_est.argmax(dim=-1)
+        return self.ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=model.class_weights, class_dim=2)
 
     def compute_point_stage_output(
         self,
@@ -154,25 +140,23 @@ class PointDiffusionBehavior:
         batch_size = int(points.shape[0])
         model_inputs = model.point_model_inputs(points, point_features)
         if evaluation:
-            loss, cheap_preds = self._evaluation_loss(model, model_inputs, labels, valid_label)
-            if prediction_mode == "full":
-                preds = self.predict_point_labels(
-                    model,
-                    points,
-                    point_features,
-                    valid_geometry,
-                    sampling_steps=model.resolve_sampling_steps(),
-                )
-            else:
-                preds = torch.where(valid_geometry, cheap_preds, torch.zeros_like(cheap_preds))
-        else:
-            loss, preds = self._training_loss_and_predictions(model, model_inputs, labels, valid_label)
-
+            loss = self._evaluation_loss(model, model_inputs, labels, valid_label)
+            preds = self.predict_point_labels(
+                model,
+                points,
+                point_features,
+                valid_geometry,
+            )
+            return {
+                "loss": loss,
+                "preds": preds,
+                "labels": labels,
+                "metric_mask": valid_label,
+                "batch_size": batch_size,
+            }
+        loss = self._training_loss(model, model_inputs, labels, valid_label)
         return {
             "loss": loss,
-            "preds": preds,
-            "labels": labels,
-            "metric_mask": valid_label,
             "batch_size": batch_size,
         }
 
@@ -190,8 +174,7 @@ class RangeSupervisedBehavior:
     def prepare_runtime(self, model) -> None:
         _ = model
 
-    def predict_range_labels(self, model, batch: dict, *, sampling_steps: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-        _ = sampling_steps
+    def predict_range_labels(self, model, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
         logits, labels, valid = model.predict_range_logits(batch)
         preds = logits.argmax(dim=1)
         preds = torch.where(valid, preds, torch.zeros_like(preds))
@@ -245,42 +228,33 @@ class RangeDiffusionBehavior:
     def prepare_runtime(self, model) -> None:
         self.ddpm.to(model.device)
 
-    def _predict_labels(self, model, cond: torch.Tensor, valid: torch.Tensor, sampling_steps: int | None = None) -> torch.Tensor:
+    def _predict_labels(self, model, cond: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
         x0 = self.ddpm.sample(
             model.predict_diffusion_target,
             cond,
             sample_shape=(cond.shape[0], int(model.hparams.num_classes), cond.shape[2], cond.shape[3]),
-            steps=sampling_steps,
         )
         preds = x0.argmax(dim=1)
         return torch.where(valid, preds, torch.zeros_like(preds))
 
-    def predict_range_labels(self, model, batch: dict, *, sampling_steps: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def predict_range_labels(self, model, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
         cond, labels, valid = model.prepare_range_batch(batch)
-        preds = self._predict_labels(model, cond, valid, sampling_steps=sampling_steps)
+        preds = self._predict_labels(model, cond, valid)
         return preds, labels
 
-    def _evaluation_loss(self, model, cond: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _evaluation_loss(self, model, cond: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
         x0 = labels_to_soft_range(labels, int(model.hparams.num_classes), valid)
         t = torch.ones(cond.shape[0], device=model.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
         eps_pred = model.predict_diffusion_target(x_t, t, cond)
-        loss = self.ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=None, class_dim=1)
-        sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
-        sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
-        x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
-        return loss, x0_est.argmax(dim=1)
+        return self.ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=None, class_dim=1)
 
-    def _training_loss_and_predictions(self, model, cond: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _training_loss(self, model, cond: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
         x0 = labels_to_soft_range(labels, int(model.hparams.num_classes), valid)
         t = torch.randint(1, self.ddpm.T + 1, (cond.shape[0],), device=model.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
         eps_pred = model.predict_diffusion_target(x_t, t, cond)
-        loss = self.ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=model.class_weights, class_dim=1)
-        sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
-        sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
-        x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
-        return loss, x0_est.argmax(dim=1)
+        return self.ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=model.class_weights, class_dim=1)
 
     def compute_range_stage_output(
         self,
@@ -295,19 +269,18 @@ class RangeDiffusionBehavior:
         cond, labels, valid = model.prepare_range_batch(batch)
         batch_size = int(batch["range_images"].shape[0])
         if evaluation:
-            loss, cheap_preds = self._evaluation_loss(model, cond, labels, valid)
-            if prediction_mode == "full":
-                preds = self._predict_labels(model, cond, valid, sampling_steps=model.resolve_sampling_steps())
-            else:
-                preds = torch.where(valid, cheap_preds, torch.zeros_like(cheap_preds))
-        else:
-            loss, preds = self._training_loss_and_predictions(model, cond, labels, valid)
-
+            loss = self._evaluation_loss(model, cond, labels, valid)
+            preds = self._predict_labels(model, cond, valid)
+            return {
+                "loss": loss,
+                "preds": preds,
+                "labels": labels,
+                "metric_mask": valid & (labels > 0),
+                "batch_size": batch_size,
+            }
+        loss = self._training_loss(model, cond, labels, valid)
         return {
             "loss": loss,
-            "preds": preds,
-            "labels": labels,
-            "metric_mask": valid & (labels > 0),
             "batch_size": batch_size,
         }
 

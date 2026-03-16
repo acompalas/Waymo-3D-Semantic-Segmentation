@@ -72,7 +72,6 @@ class ModelSelection:
             head=self.head,
             behavior=self.behavior,
             diffusion_steps=getattr(args, "diffusion_steps", 1000),
-            validation_prediction_mode=getattr(args, "validation_prediction_mode", "cheap"),
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
             geometry_only=bool(args.geometry_only),
         )
@@ -99,7 +98,6 @@ class ModelSelection:
 
 def add_diffusion_behavior_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--diffusion-steps", type=int, default=1000)
-    parser.add_argument("--validation-prediction-mode", type=str, default="cheap", choices=["cheap", "full"])
 
 
 REPRESENTATION_REGISTRY: dict[str, RepresentationSpec] = {

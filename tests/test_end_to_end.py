@@ -126,7 +126,6 @@ class EndToEndSmokeTests(unittest.TestCase):
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
-                    sampling_steps=None,
                     render_num_points=8,
                     output_gif=self.base_dir / "point.gif",
                     fps=2.0,
@@ -151,7 +150,6 @@ class EndToEndSmokeTests(unittest.TestCase):
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
-                    sampling_steps=None,
                     render_num_points=8,
                     output_gif=self.base_dir / "range.gif",
                     fps=2.0,
@@ -173,8 +171,7 @@ class EndToEndSmokeTests(unittest.TestCase):
 
         calls: list[tuple[bool, bool]] = []
 
-        def fake_predict_segmented_pointcloud(*, point_frame, range_frame=None, sampling_steps=None):
-            _ = sampling_steps
+        def fake_predict_segmented_pointcloud(*, point_frame, range_frame=None):
             calls.append((point_frame is not None, range_frame is not None))
             return {
                 "points_xyz": point_frame["xyz"].reshape(-1, 3).astype(np.float32, copy=False),
@@ -202,7 +199,6 @@ class EndToEndSmokeTests(unittest.TestCase):
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
-                    sampling_steps=None,
                     render_num_points=8,
                     output_gif=self.base_dir / "contract.gif",
                     fps=2.0,
@@ -223,9 +219,8 @@ class EndToEndSmokeTests(unittest.TestCase):
 
         observed_point_count: list[int] = []
 
-        def fake_predict_segmented_pointcloud(*, point_frame, range_frame=None, sampling_steps=None):
+        def fake_predict_segmented_pointcloud(*, point_frame, range_frame=None):
             _ = range_frame
-            _ = sampling_steps
             observed_point_count.append(int(point_frame["xyz"].reshape(-1, 3).shape[0]))
             return {
                 "points_xyz": point_frame["xyz"].reshape(-1, 3).astype(np.float32, copy=False),
@@ -253,7 +248,6 @@ class EndToEndSmokeTests(unittest.TestCase):
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
-                    sampling_steps=None,
                     render_num_points=5,
                     output_gif=self.base_dir / "point_limit.gif",
                     fps=2.0,
@@ -382,11 +376,10 @@ class EndToEndSmokeTests(unittest.TestCase):
                 batch_size=1,
                 num_points=8,
                 num_classes=23,
-                num_workers=0,
-                worker_start_method="spawn",
-                max_cached_segments=1,
-                sampling_steps=None,
-                accelerator="cpu",
+                    num_workers=0,
+                    worker_start_method="spawn",
+                    max_cached_segments=1,
+                    accelerator="cpu",
                 devices=1,
                 precision="32",
                 seed=0,

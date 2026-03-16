@@ -52,6 +52,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
         worker_start_method: str = "spawn",
         balanced_weights: bool = True,
         train_segment_fraction: float = 1.0,
+        val_samples_per_segment: int = 0,
     ) -> None:
         super().__init__()
         self.data_dir = Path(data_dir)
@@ -70,8 +71,11 @@ class WaymoLidarDataModule(L.LightningDataModule):
         self.worker_start_method = str(worker_start_method)
         self.balanced_weights = bool(balanced_weights)
         self.train_segment_fraction = float(train_segment_fraction)
+        self.val_samples_per_segment = int(val_samples_per_segment)
         if not (0.0 < self.train_segment_fraction <= 1.0):
             raise ValueError(f"train_segment_fraction must be in (0, 1], got {self.train_segment_fraction}")
+        if self.val_samples_per_segment < 0:
+            raise ValueError(f"val_samples_per_segment must be >= 0, got {self.val_samples_per_segment}")
 
         self.train_dataset: Optional[PreprocessedPointCloudDataset | PreprocessedRangeImageDataset] = None
         self.val_dataset: Optional[PreprocessedPointCloudDataset | PreprocessedRangeImageDataset] = None
@@ -149,6 +153,44 @@ class WaymoLidarDataModule(L.LightningDataModule):
         val_segments = sorted(str(x) for x in perm[:val_count].tolist())
         train_only = sorted(str(x) for x in perm[val_count:].tolist())
         return train_only, val_segments
+
+    def _subset_frames_evenly(
+        self,
+        dataset: PreprocessedPointCloudDataset | PreprocessedRangeImageDataset,
+        *,
+        samples_per_segment: int,
+    ) -> list[tuple[str, int, int]]:
+        if samples_per_segment <= 0:
+            return list(dataset._frames)
+
+        selected: list[tuple[str, int, int]] = []
+        for segment in dataset.segment_names:
+            segment_frames = list(dataset.frames_for_segment(segment))
+            if not segment_frames:
+                continue
+            take = min(len(segment_frames), int(samples_per_segment))
+            if take >= len(segment_frames):
+                chosen = segment_frames
+            else:
+                indices = np.linspace(0, len(segment_frames) - 1, num=take, dtype=int).tolist()
+                chosen = [segment_frames[idx] for idx in indices]
+            selected.extend((str(segment), int(frame_idx), int(timestamp)) for frame_idx, timestamp in chosen)
+        return selected
+
+    def _subset_dataset_for_validation(
+        self,
+        dataset: PreprocessedPointCloudDataset | PreprocessedRangeImageDataset,
+        *,
+        samples_per_segment: int,
+        seed: int,
+    ) -> PreprocessedPointCloudDataset | PreprocessedRangeImageDataset:
+        subset = self._make_dataset(
+            segments=dataset.segment_names,
+            seed=seed,
+            deterministic_sampling=True,
+        )
+        subset._set_frames(self._subset_frames_evenly(dataset, samples_per_segment=samples_per_segment))
+        return subset
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
@@ -231,15 +273,22 @@ class WaymoLidarDataModule(L.LightningDataModule):
     def val_dataloader(self) -> DataLoader:
         if self.val_dataset is None:
             raise RuntimeError("Call setup('fit') before requesting val_dataloader().")
+        dataset = self.val_dataset
+        if self.val_samples_per_segment > 0:
+            dataset = self._subset_dataset_for_validation(
+                self.val_dataset,
+                samples_per_segment=self.val_samples_per_segment,
+                seed=self.seed + 101,
+            )
         self._val_sampler = SceneShuffleBatchSampler(
-            records=self.val_dataset.records,
+            records=dataset.records,
             batch_size=self.batch_size,
             shuffle_scenes=False,
             shuffle_within_scene=False,
             drop_last=False,
             seed=self.seed + 101,
         )
-        return self._loader(self.val_dataset, self._val_sampler)
+        return self._loader(dataset, self._val_sampler)
 
     def test_dataloader(self) -> DataLoader:
         if self.test_dataset is None:

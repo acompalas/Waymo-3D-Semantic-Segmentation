@@ -90,7 +90,7 @@ class DataAndModelTests(unittest.TestCase):
             head="mlp",
             behavior="supervised",
         )
-        point_prediction = point_supervised.predict_segmented_pointcloud(point_frame=point_frame, sampling_steps=2)
+        point_prediction = point_supervised.predict_segmented_pointcloud(point_frame=point_frame)
         self.assertEqual(sorted(point_prediction), ["points_xyz", "pred_labels", "true_labels", "valid_label"])
 
         point_diffusion = PointCloudTaskModel(
@@ -102,7 +102,7 @@ class DataAndModelTests(unittest.TestCase):
             head="mlp",
             behavior="diffusion",
         )
-        point_prediction = point_diffusion.predict_segmented_pointcloud(point_frame=point_frame, sampling_steps=2)
+        point_prediction = point_diffusion.predict_segmented_pointcloud(point_frame=point_frame)
         self.assertEqual(point_prediction["pred_labels"].ndim, 1)
 
         range_supervised = RangeImageTaskModel(
@@ -113,7 +113,7 @@ class DataAndModelTests(unittest.TestCase):
             head="segmentation",
             behavior="supervised",
         )
-        range_prediction = range_supervised.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame, sampling_steps=2)
+        range_prediction = range_supervised.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
         self.assertEqual(range_prediction["pred_labels"].ndim, 1)
 
         range_diffusion = RangeImageTaskModel(
@@ -124,10 +124,10 @@ class DataAndModelTests(unittest.TestCase):
             head="denoising",
             behavior="diffusion",
         )
-        range_prediction = range_diffusion.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame, sampling_steps=2)
+        range_prediction = range_diffusion.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
         self.assertEqual(range_prediction["pred_labels"].ndim, 1)
 
-    def test_diffusion_defaults_and_non_diffusion_ignores_sampling_steps(self) -> None:
+    def test_diffusion_predictions_use_trained_schedule_without_public_override(self) -> None:
         point_ds = PreprocessedPointCloudDataset(self.point_root, source_subdirs="training", num_points=8)
         range_ds = PreprocessedRangeImageDataset(self.range_root, source_subdirs="training")
         point_frame = point_ds.get_dense_frame("segment_train", 100)
@@ -142,9 +142,10 @@ class DataAndModelTests(unittest.TestCase):
             head="mlp",
             behavior="diffusion",
         )
-        point_diffusion.set_sampling_steps(3)
-        prediction = point_diffusion.predict_segmented_pointcloud(point_frame=point_frame)
-        self.assertEqual(prediction["pred_labels"].shape[0], prediction["points_xyz"].shape[0])
+        with patch.object(point_diffusion.behavior_impl.ddpm, "sample", wraps=point_diffusion.behavior_impl.ddpm.sample) as sample_mock:
+            prediction = point_diffusion.predict_segmented_pointcloud(point_frame=point_frame)
+            self.assertEqual(prediction["pred_labels"].shape[0], prediction["points_xyz"].shape[0])
+            self.assertNotIn("steps", sample_mock.call_args.kwargs)
 
         range_diffusion = RangeImageTaskModel(
             num_classes=23,
@@ -154,19 +155,7 @@ class DataAndModelTests(unittest.TestCase):
             head="denoising",
             behavior="diffusion",
         )
-        range_diffusion.set_sampling_steps(3)
         prediction = range_diffusion.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
-        self.assertEqual(prediction["pred_labels"].shape[0], prediction["points_xyz"].shape[0])
-
-        point_supervised = PointCloudTaskModel(
-            num_classes=23,
-            hidden_dim=32,
-            depth=2,
-            backbone="edgeconv",
-            head="mlp",
-            behavior="supervised",
-        )
-        prediction = point_supervised.predict_segmented_pointcloud(point_frame=point_frame, sampling_steps=7)
         self.assertEqual(prediction["pred_labels"].shape[0], prediction["points_xyz"].shape[0])
 
     def test_shared_stage_output_contract_for_representative_models(self) -> None:
@@ -202,32 +191,16 @@ class DataAndModelTests(unittest.TestCase):
         ]
         for model, batch in models_and_batches:
             output = model.compute_stage_output(batch, stage="train", prediction_mode="cheap", evaluation=False)
-            self.assertEqual(sorted(output), ["batch_size", "labels", "loss", "metric_mask", "preds"])
-            self.assertEqual(output["preds"].shape, output["labels"].shape)
-            self.assertEqual(output["metric_mask"].shape, output["labels"].shape)
+            self.assertIn("loss", output)
+            self.assertIn("batch_size", output)
+            if model.hparams.behavior == "diffusion":
+                self.assertEqual(sorted(output), ["batch_size", "loss"])
+            else:
+                self.assertEqual(sorted(output), ["batch_size", "labels", "loss", "metric_mask", "preds"])
+                self.assertEqual(output["preds"].shape, output["labels"].shape)
+                self.assertEqual(output["metric_mask"].shape, output["labels"].shape)
 
-    def test_diffusion_validation_prediction_mode_switches_full_sampler_usage(self) -> None:
-        dm = self._point_dm()
-        dm.setup("fit")
-        batch = next(iter(dm.val_dataloader()))
-
-        model = PointCloudTaskModel(
-            num_classes=23,
-            hidden_dim=32,
-            depth=2,
-            diffusion_steps=4,
-            validation_prediction_mode="cheap",
-            backbone="edgeconv",
-            head="mlp",
-            behavior="diffusion",
-        )
-        with patch.object(model.behavior_impl, "predict_point_labels", wraps=model.behavior_impl.predict_point_labels) as full_predict:
-            model.compute_stage_output(batch, stage="val", prediction_mode="cheap", evaluation=True)
-            self.assertEqual(full_predict.call_count, 0)
-            model.compute_stage_output(batch, stage="val", prediction_mode="full", evaluation=True)
-            self.assertEqual(full_predict.call_count, 1)
-
-    def test_diffusion_sampling_override_applies_to_full_validation_prediction(self) -> None:
+    def test_diffusion_validation_uses_full_sampler_for_metrics(self) -> None:
         dm = self._point_dm()
         dm.setup("fit")
         batch = next(iter(dm.val_dataloader()))
@@ -241,10 +214,31 @@ class DataAndModelTests(unittest.TestCase):
             head="mlp",
             behavior="diffusion",
         )
-        model.set_sampling_steps(3)
         with patch.object(model.behavior_impl.ddpm, "sample", wraps=model.behavior_impl.ddpm.sample) as sample_mock:
             model.compute_stage_output(batch, stage="val", prediction_mode="full", evaluation=True)
-            self.assertEqual(sample_mock.call_args.kwargs["steps"], 3)
+            self.assertIsNone(sample_mock.call_args.kwargs.get("steps"))
+
+    def test_diffusion_validation_outputs_predictions_but_training_does_not(self) -> None:
+        dm = self._point_dm()
+        dm.setup("fit")
+        train_batch = next(iter(dm.train_dataloader()))
+        val_batch = next(iter(dm.val_dataloader()))
+
+        model = PointCloudTaskModel(
+            num_classes=23,
+            hidden_dim=32,
+            depth=2,
+            diffusion_steps=4,
+            backbone="pointnet",
+            head="mlp",
+            behavior="diffusion",
+        )
+        train_output = model.compute_stage_output(train_batch, stage="train", prediction_mode="full", evaluation=False)
+        self.assertEqual(sorted(train_output), ["batch_size", "loss"])
+
+        val_output = model.compute_stage_output(val_batch, stage="val", prediction_mode="full", evaluation=True)
+        self.assertEqual(sorted(val_output), ["batch_size", "labels", "loss", "metric_mask", "preds"])
+        self.assertEqual(val_output["preds"].shape, val_output["labels"].shape)
 
     def test_point_backbones_accept_xyz_and_validate_timestep_support(self) -> None:
         xyz = torch.randn(1, 8, 3)

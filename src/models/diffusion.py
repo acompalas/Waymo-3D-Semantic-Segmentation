@@ -104,14 +104,9 @@ class DDPM:
         return mu + sqrt_beta_tilde * z * nonzero
 
     @torch.no_grad()
-    def sample(self, model, cond: torch.Tensor, sample_shape: tuple[int, ...], steps: Optional[int] = None) -> torch.Tensor:
+    def sample(self, model, cond: torch.Tensor, sample_shape: tuple[int, ...]) -> torch.Tensor:
         x_t = torch.randn(sample_shape, device=cond.device)
-        if steps is not None and 0 < int(steps) < self.T:
-            step_indices = torch.linspace(self.T, 1, steps=int(steps), device=cond.device).round().long().tolist()
-        else:
-            step_indices = list(range(self.T, 0, -1))
-
-        for t_int in step_indices:
+        for t_int in range(self.T, 0, -1):
             t = torch.full((sample_shape[0],), int(t_int), dtype=torch.long, device=cond.device)
             x_t = self.p_sample(model, x_t, t, cond)
         return x_t
