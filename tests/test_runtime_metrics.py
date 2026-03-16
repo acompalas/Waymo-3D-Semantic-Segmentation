@@ -51,7 +51,6 @@ class RuntimeMetricsTests(unittest.TestCase):
         )
         summary = accumulator.summary()
 
-        self.assertEqual(summary["stage"], "test")
         self.assertIn("loss", summary["metrics"])
         self.assertIn("acc", summary["metrics"])
         self.assertIn("mIoU", summary["metrics"])

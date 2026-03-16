@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from src.main import parse_args
+from src.main import _default_wandb_run_name, _generate_wandb_run_id, _wandb_name_timestamp, parse_args
 from src.runtime import backbone_choices, get_model_selection, head_choices, representation_choices
 
 
@@ -38,6 +39,7 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(args.proj_dim, 64)
         self.assertEqual(args.proj_depth, 2)
         self.assertEqual(args.val_samples_per_segment, 3)
+        self.assertEqual(args.log_pointcloud_count, 4)
         self.assertTrue(args.geometry_only)
 
     def test_point_diffusion_parser_adds_behavior_args(self) -> None:
@@ -85,6 +87,20 @@ class RegistryCliTests(unittest.TestCase):
     def test_selection_builds_composite_model_id(self) -> None:
         selection = get_model_selection("point_clouds", "edgeconv", "mlp", "supervised")
         self.assertEqual(selection.model_id, "point_clouds__edgeconv__mlp__supervised")
+
+    def test_default_wandb_run_name_uses_representation_backbone_and_timestamp(self) -> None:
+        selection = get_model_selection("point_clouds", "edgeconv", "mlp", "supervised")
+        self.assertEqual(_default_wandb_run_name(selection, "20260316-154500"), "point_clouds-edgeconv-20260316-154500")
+
+    def test_generate_wandb_run_id_returns_short_hex(self) -> None:
+        with patch("src.main.uuid.uuid4") as uuid4_mock:
+            uuid4_mock.return_value.hex = "abc123ef45678900"
+            self.assertEqual(_generate_wandb_run_id(), "abc123ef")
+
+    def test_wandb_name_timestamp_uses_expected_format(self) -> None:
+        with patch("src.main.datetime") as datetime_mock:
+            datetime_mock.now.return_value.strftime.return_value = "20260316-154500"
+            self.assertEqual(_wandb_name_timestamp(), "20260316-154500")
 
 
 if __name__ == "__main__":

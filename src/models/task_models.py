@@ -111,14 +111,12 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         batch: dict,
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict:
         return self.behavior_impl.compute_point_stage_output(
             self,
             batch,
             stage=stage,
-            prediction_mode=prediction_mode,
             evaluation=evaluation,
         )
 
@@ -192,14 +190,12 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         batch: dict,
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict:
         return self.behavior_impl.compute_range_stage_output(
             self,
             batch,
             stage=stage,
-            prediction_mode=prediction_mode,
             evaluation=evaluation,
         )
 

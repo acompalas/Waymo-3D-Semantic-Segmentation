@@ -1,10 +1,10 @@
 import argparse
-import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import re
 
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -17,7 +17,7 @@ from src.main import run_evaluate, run_render, run_train
 from src.models import PointCloudTaskModel, RangeImageTaskModel
 from src.runtime import get_model_selection
 from src.tools.rendering import ensure_open3d_linux_env
-from tests.helpers import build_synthetic_preprocessed_roots
+from tests.helpers import FakeWandbLogger, FakeWandbModule, build_synthetic_preprocessed_roots
 
 
 def _fit_and_save(model, datamodule, root_dir: Path) -> Path:
@@ -45,6 +45,7 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.base_dir = Path(self.tmpdir.name)
         self.point_root, self.range_root = build_synthetic_preprocessed_roots(self.base_dir)
+        FakeWandbLogger.instances.clear()
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
@@ -262,10 +263,14 @@ class EndToEndSmokeTests(unittest.TestCase):
 
         self.assertEqual(observed_point_count, [5])
 
-    def test_train_writes_final_report_artifacts_and_uses_checkpoint_reload(self) -> None:
+    def test_train_logs_final_wandb_artifacts_and_uses_checkpoint_reload(self) -> None:
         output_dir = self.base_dir / "train_outputs"
         selection = get_model_selection("point_clouds", "handcrafted", "mlp", "supervised")
-        with patch.object(selection.spec.module_cls, "load_from_checkpoint", wraps=selection.spec.module_cls.load_from_checkpoint) as load_mock:
+        with (
+            patch.object(selection.spec.module_cls, "load_from_checkpoint", wraps=selection.spec.module_cls.load_from_checkpoint) as load_mock,
+            patch("src.main.WandbLogger", FakeWandbLogger),
+            patch("src.runtime.wandb_logging._import_wandb", return_value=FakeWandbModule),
+        ):
             run_train(
                 argparse.Namespace(
                     command="train",
@@ -301,97 +306,175 @@ class EndToEndSmokeTests(unittest.TestCase):
                     knn_scales="2",
                     knn_support_size=8,
                     knn_query_chunk=8,
+                    wandb_project="test-project",
+                    wandb_entity=None,
+                    wandb_run_name=None,
+                    wandb_tags="smoke",
+                    log_pointcloud_count=4,
                 )
             )
 
         self.assertGreaterEqual(load_mock.call_count, 1)
-        run_dir = next((output_dir / selection.model_id).glob("version_*"))
-        report_path = run_dir / "final_report.json"
-        self.assertTrue(report_path.exists())
-        payload = json.loads(report_path.read_text(encoding="utf-8"))
-        self.assertEqual(sorted(payload["stages"]), ["test", "train", "val"])
-        for name in ("train_confusion_raw.png", "train_confusion_normalized.png", "val_confusion_raw.png", "test_confusion_raw.png"):
-            self.assertTrue((run_dir / name).exists())
+        logger = FakeWandbLogger.instances[-1]
+        self.assertRegex(logger.name, r"^point_clouds-handcrafted-\d{8}-\d{6}$")
+        logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
+        self.assertIn("train/confusion_matrix", logged_keys)
+        self.assertIn("val/confusion_matrix", logged_keys)
+        self.assertIn("final_test/confusion_matrix", logged_keys)
+        self.assertIn("class_legend", logged_keys)
+        self.assertTrue(any(key.startswith("final_train/pointcloud_") for key in logged_keys))
+        self.assertTrue(logger.experiment.finished)
 
     def test_train_can_skip_auto_evaluation(self) -> None:
         output_dir = self.base_dir / "train_no_eval"
-        selection = get_model_selection("point_clouds", "handcrafted", "mlp", "supervised")
-        run_train(
-            argparse.Namespace(
-                command="train",
-                representation="point_clouds",
-                behavior="supervised",
-                backbone="handcrafted",
-                head="mlp",
-                data_dir=self.point_root,
-                train_subdirs="training",
-                val_subdirs="validation",
-                test_subdirs="validation",
-                batch_size=1,
-                num_points=8,
-                num_classes=23,
-                val_fraction=0.1,
-                num_workers=0,
-                worker_start_method="spawn",
-                max_epochs=1,
-                lr=1e-3,
-                weight_decay=1e-4,
-                no_balanced_class_weights=False,
-                early_stopping_patience=2,
-                early_stopping_min_delta=0.0,
-                train_segment_fraction=1.0,
-                max_cached_segments=1,
-                accelerator="cpu",
-                devices=1,
-                precision="32",
-                seed=0,
-                output_dir=output_dir,
-                auto_evaluate=False,
-                geometry_only=False,
-                knn_scales="2",
-                knn_support_size=8,
-                knn_query_chunk=8,
+        with (
+            patch("src.main.WandbLogger", FakeWandbLogger),
+            patch("src.runtime.wandb_logging._import_wandb", return_value=FakeWandbModule),
+        ):
+            run_train(
+                argparse.Namespace(
+                    command="train",
+                    representation="point_clouds",
+                    behavior="supervised",
+                    backbone="handcrafted",
+                    head="mlp",
+                    data_dir=self.point_root,
+                    train_subdirs="training",
+                    val_subdirs="validation",
+                    test_subdirs="validation",
+                    batch_size=1,
+                    num_points=8,
+                    num_classes=23,
+                    val_fraction=0.1,
+                    num_workers=0,
+                    worker_start_method="spawn",
+                    max_epochs=1,
+                    lr=1e-3,
+                    weight_decay=1e-4,
+                    no_balanced_class_weights=False,
+                    early_stopping_patience=2,
+                    early_stopping_min_delta=0.0,
+                    train_segment_fraction=1.0,
+                    max_cached_segments=1,
+                    accelerator="cpu",
+                    devices=1,
+                    precision="32",
+                    seed=0,
+                    output_dir=output_dir,
+                    auto_evaluate=False,
+                    geometry_only=False,
+                    knn_scales="2",
+                    knn_support_size=8,
+                    knn_query_chunk=8,
+                    wandb_project="test-project",
+                    wandb_entity=None,
+                    wandb_run_name=None,
+                    wandb_tags="smoke",
+                    log_pointcloud_count=4,
+                )
             )
-        )
-        run_dir = next((output_dir / selection.model_id).glob("version_*"))
-        self.assertFalse((run_dir / "final_report.json").exists())
+        logger = FakeWandbLogger.instances[-1]
+        self.assertRegex(logger.name, r"^point_clouds-handcrafted-\d{8}-\d{6}$")
+        logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
+        self.assertNotIn("final_test/confusion_matrix", logged_keys)
+        self.assertTrue(logger.experiment.finished)
 
-    def test_evaluate_writes_requested_split_report(self) -> None:
+    def test_evaluate_logs_requested_split_to_wandb(self) -> None:
         model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised")
         ckpt_path = _fit_and_save(model, self._point_dm(), self.base_dir / "eval_ckpt")
         output_dir = self.base_dir / "eval_report"
-        selection = get_model_selection("point_clouds", "handcrafted", "mlp", "supervised")
-        run_evaluate(
-            argparse.Namespace(
-                command="evaluate",
-                representation="point_clouds",
-                behavior="supervised",
-                backbone="handcrafted",
-                head="mlp",
-                checkpoint=ckpt_path,
-                data_dir=self.point_root,
-                test_subdirs="validation",
-                splits="test",
-                max_batches=1,
-                batch_size=1,
-                num_points=8,
-                num_classes=23,
+        with (
+            patch("src.main.WandbLogger", FakeWandbLogger),
+            patch("src.runtime.wandb_logging._import_wandb", return_value=FakeWandbModule),
+        ):
+            run_evaluate(
+                argparse.Namespace(
+                    command="evaluate",
+                    representation="point_clouds",
+                    behavior="supervised",
+                    backbone="handcrafted",
+                    head="mlp",
+                    checkpoint=ckpt_path,
+                    data_dir=self.point_root,
+                    test_subdirs="validation",
+                    splits="test",
+                    max_batches=1,
+                    batch_size=1,
+                    num_points=8,
+                    num_classes=23,
                     num_workers=0,
                     worker_start_method="spawn",
                     max_cached_segments=1,
                     accelerator="cpu",
-                devices=1,
-                precision="32",
-                seed=0,
-                output_dir=output_dir,
+                    devices=1,
+                    precision="32",
+                    seed=0,
+                    output_dir=output_dir,
+                    wandb_project="test-project",
+                    wandb_entity=None,
+                    wandb_run_name=None,
+                    wandb_tags="eval",
+                    log_pointcloud_count=4,
+                )
             )
+        logger = FakeWandbLogger.instances[-1]
+        self.assertRegex(logger.name, r"^point_clouds-handcrafted-\d{8}-\d{6}$")
+        logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
+        self.assertIn("eval_test/confusion_matrix", logged_keys)
+        self.assertTrue(any(key.startswith("eval_test/pointcloud_") for key in logged_keys))
+        self.assertTrue(logger.experiment.finished)
+
+    def test_default_wandb_run_name_uses_timestamp_suffix(self) -> None:
+        output_dir = self.base_dir / "wandb_name_increment"
+        common_args = dict(
+            command="train",
+            representation="point_clouds",
+            behavior="supervised",
+            backbone="handcrafted",
+            head="mlp",
+            data_dir=self.point_root,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            val_fraction=0.1,
+            num_workers=0,
+            worker_start_method="spawn",
+            max_epochs=1,
+            lr=1e-3,
+            weight_decay=1e-4,
+            no_balanced_class_weights=False,
+            early_stopping_patience=2,
+            early_stopping_min_delta=0.0,
+            train_segment_fraction=1.0,
+            max_cached_segments=1,
+            accelerator="cpu",
+            devices=1,
+            precision="32",
+            seed=0,
+            output_dir=output_dir,
+            auto_evaluate=False,
+            geometry_only=False,
+            knn_scales="2",
+            knn_support_size=8,
+            knn_query_chunk=8,
+            wandb_project="test-project",
+            wandb_entity=None,
+            wandb_run_name=None,
+            wandb_tags="smoke",
+            log_pointcloud_count=4,
         )
-        report_path = output_dir / f"{selection.model_id}_report.json"
-        self.assertTrue(report_path.exists())
-        payload = json.loads(report_path.read_text(encoding="utf-8"))
-        self.assertEqual(sorted(payload["stages"]), ["test"])
-        self.assertTrue((output_dir / "test_confusion_raw.png").exists())
-        self.assertTrue((output_dir / "test_confusion_normalized.png").exists())
+        with (
+            patch("src.main.WandbLogger", FakeWandbLogger),
+            patch("src.runtime.wandb_logging._import_wandb", return_value=FakeWandbModule),
+            patch("src.main._wandb_name_timestamp", side_effect=["20260316-154500", "20260316-154501"]),
+        ):
+            run_train(argparse.Namespace(**common_args))
+            run_train(argparse.Namespace(**common_args))
+        self.assertEqual(FakeWandbLogger.instances[-2].name, "point_clouds-handcrafted-20260316-154500")
+        self.assertEqual(FakeWandbLogger.instances[-1].name, "point_clouds-handcrafted-20260316-154501")
 
     def test_linux_open3d_environment_forces_x11(self) -> None:
         previous_gdk = os.environ.get("GDK_BACKEND")

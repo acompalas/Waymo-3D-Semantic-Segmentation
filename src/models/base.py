@@ -5,6 +5,7 @@ from lightning.pytorch.utilities.rank_zero import rank_zero_info
 import numpy as np
 import torch
 
+from ..runtime.common import sanitize_metric_name
 from ..runtime.metrics import empty_confusion_matrix, iou_metrics_from_confusion_matrix
 from ..runtime.stage_eval import consume_stage_output, validate_stage_output
 
@@ -51,6 +52,8 @@ class SegmentationLightningModule(L.LightningModule):
         self.register_buffer("_test_confmat", empty_confusion_matrix(self._metric_num_classes), persistent=False)
         self._weights_ready = False
         self._stage_has_predictions = {"train": False, "val": False, "test": False}
+        self._class_names = [f"class_{idx}" for idx in range(self._metric_num_classes)]
+        self._class_metric_names = [sanitize_metric_name(name) for name in self._class_names]
 
     @property
     def class_weights(self) -> Optional[torch.Tensor]:
@@ -71,10 +74,16 @@ class SegmentationLightningModule(L.LightningModule):
     def prepare_runtime(self) -> None:
         return None
 
-    def _resolve_prediction_mode(self, stage: str) -> str:
-        if stage in {"train", "val", "test"}:
-            return "full"
-        return "full"
+    @property
+    def class_names(self) -> list[str]:
+        return list(self._class_names)
+
+    def set_class_names(self, class_names: list[str]) -> None:
+        values = [str(name) for name in class_names]
+        if len(values) < self._metric_num_classes:
+            values.extend(f"class_{idx}" for idx in range(len(values), self._metric_num_classes))
+        self._class_names = values[: self._metric_num_classes]
+        self._class_metric_names = [sanitize_metric_name(name) for name in self._class_names]
 
     def _confmat_for_stage(self, stage: str) -> torch.Tensor:
         if stage == "train":
@@ -98,7 +107,10 @@ class SegmentationLightningModule(L.LightningModule):
         metrics = iou_metrics_from_confusion_matrix(self._confmat_for_stage(stage), ignore_class_zero=True)
         self.log(f"{stage}_mIoU", metrics["miou"], on_step=False, on_epoch=True, prog_bar=True)
         for cls_idx, cls_iou in enumerate(metrics["per_class_iou"]):
-            self.log(f"{stage}_IoU_class_{cls_idx}", cls_iou, on_step=False, on_epoch=True, prog_bar=False)
+            if cls_idx == 0:
+                continue
+            metric_name = self._class_metric_names[cls_idx]
+            self.log(f"{stage}_IoU_{metric_name}", cls_iou, on_step=False, on_epoch=True, prog_bar=False)
 
     def _consume_and_log_stage_output(self, stage: str, output: dict[str, Any]) -> torch.Tensor:
         output = validate_stage_output(output)
@@ -115,7 +127,6 @@ class SegmentationLightningModule(L.LightningModule):
         output = self.compute_stage_output(
             batch,
             stage=stage,
-            prediction_mode=self._resolve_prediction_mode(stage),
             evaluation=(stage != "train"),
         )
         return self._consume_and_log_stage_output(stage, output)
@@ -125,13 +136,11 @@ class SegmentationLightningModule(L.LightningModule):
         batch: dict[str, Any],
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict[str, Any]:
         output = self._compute_stage_output(
             batch,
             stage=stage,
-            prediction_mode=prediction_mode,
             evaluation=evaluation,
         )
         return validate_stage_output(output)
@@ -141,7 +150,6 @@ class SegmentationLightningModule(L.LightningModule):
         batch: dict[str, Any],
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict[str, Any]:
         raise NotImplementedError
@@ -184,6 +192,9 @@ class SegmentationLightningModule(L.LightningModule):
             rank_zero_info(f"Class weights: {_format_class_summary(weights, float_values=True)}")
         else:
             rank_zero_info("Class weights: unavailable (not computed by datamodule).")
+        class_names = getattr(dm, "class_names", None) if dm is not None else None
+        if class_names is not None:
+            self.set_class_names(list(class_names))
         self.prepare_runtime()
 
     def on_validation_start(self) -> None:

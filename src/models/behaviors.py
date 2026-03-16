@@ -32,11 +32,9 @@ class PointSupervisedBehavior:
         batch: dict,
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict:
         _ = stage
-        _ = prediction_mode
         _ = evaluation
         points = batch["points"].float()
         point_features = batch["point_features"].float()
@@ -128,7 +126,6 @@ class PointDiffusionBehavior:
         batch: dict,
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict:
         _ = stage
@@ -186,11 +183,9 @@ class RangeSupervisedBehavior:
         batch: dict,
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict:
         _ = stage
-        _ = prediction_mode
         _ = evaluation
         logits, labels, valid = model.predict_range_logits(batch)
         preds = logits.argmax(dim=1)
@@ -262,7 +257,6 @@ class RangeDiffusionBehavior:
         batch: dict,
         *,
         stage: str,
-        prediction_mode: str,
         evaluation: bool,
     ) -> dict:
         _ = stage

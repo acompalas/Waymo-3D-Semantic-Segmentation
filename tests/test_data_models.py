@@ -190,7 +190,7 @@ class DataAndModelTests(unittest.TestCase):
             ),
         ]
         for model, batch in models_and_batches:
-            output = model.compute_stage_output(batch, stage="train", prediction_mode="cheap", evaluation=False)
+            output = model.compute_stage_output(batch, stage="train", evaluation=False)
             self.assertIn("loss", output)
             self.assertIn("batch_size", output)
             if model.hparams.behavior == "diffusion":
@@ -215,7 +215,7 @@ class DataAndModelTests(unittest.TestCase):
             behavior="diffusion",
         )
         with patch.object(model.behavior_impl.ddpm, "sample", wraps=model.behavior_impl.ddpm.sample) as sample_mock:
-            model.compute_stage_output(batch, stage="val", prediction_mode="full", evaluation=True)
+            model.compute_stage_output(batch, stage="val", evaluation=True)
             self.assertIsNone(sample_mock.call_args.kwargs.get("steps"))
 
     def test_diffusion_validation_outputs_predictions_but_training_does_not(self) -> None:
@@ -233,10 +233,10 @@ class DataAndModelTests(unittest.TestCase):
             head="mlp",
             behavior="diffusion",
         )
-        train_output = model.compute_stage_output(train_batch, stage="train", prediction_mode="full", evaluation=False)
+        train_output = model.compute_stage_output(train_batch, stage="train", evaluation=False)
         self.assertEqual(sorted(train_output), ["batch_size", "loss"])
 
-        val_output = model.compute_stage_output(val_batch, stage="val", prediction_mode="full", evaluation=True)
+        val_output = model.compute_stage_output(val_batch, stage="val", evaluation=True)
         self.assertEqual(sorted(val_output), ["batch_size", "labels", "loss", "metric_mask", "preds"])
         self.assertEqual(val_output["preds"].shape, val_output["labels"].shape)
 

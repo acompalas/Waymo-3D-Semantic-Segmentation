@@ -89,7 +89,6 @@ class StageReportAccumulator:
         for idx, value in enumerate(iou_metrics["per_class_iou"]):
             metrics[f"IoU_class_{idx}"] = scalarize_metric_tensor(value)
         return {
-            "stage": self.stage,
             "metrics": metrics,
             "confusion_matrix": self.confmat.detach().cpu().tolist(),
         }

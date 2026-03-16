@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from .preprocessed import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, source_segments_map
+from .preprocessed import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, load_class_names, source_segments_map
 from .sampler import SceneShuffleBatchSampler
 
 
@@ -85,6 +85,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
         self._test_sampler: Optional[SceneShuffleBatchSampler] = None
         self.class_weights: Optional[torch.Tensor] = None
         self.class_counts: Optional[torch.Tensor] = None
+        self.class_names = load_class_names(self.data_dir, num_classes=self.num_classes)
 
     def _dataset_cls(self):
         if self.representation == "point_clouds":

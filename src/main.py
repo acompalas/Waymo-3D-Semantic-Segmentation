@@ -1,47 +1,29 @@
 import argparse
+from datetime import datetime
 from pathlib import Path
 import sys
 from typing import Iterable
+import uuid
 
 import lightning as L
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
-from lightning.pytorch.loggers import CSVLogger
+from lightning.pytorch.loggers import WandbLogger
 import numpy as np
 import torch
 
 from .data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
-from .runtime import (
+from .runtime.common import resolve_runtime_device
+from .runtime.registry import (
     backbone_choices,
     behavior_choices,
-    collect_stage_reports,
     get_model_selection,
     head_choices,
-    log_final_report_metrics,
     maybe_add_component_train_args,
-    parse_report_splits,
-    prepare_model_for_reporting,
     representation_choices,
-    resolve_runtime_device,
-    setup_datamodule_for_report,
-    write_report_bundle,
 )
+from .runtime.report_runner import evaluate_and_log_splits, parse_report_splits, prepare_model_for_reporting, setup_datamodule_for_report
+from .runtime.wandb_logging import WandbSegmentationCallback, log_audit_pointcloud_splits
 from .tools import label_colors, render_point_cloud, save_gif
-
-
-def resolve_device(device_arg: str) -> torch.device:
-    key = str(device_arg).lower()
-    if key == "cuda":
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if key == "mps":
-        has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        return torch.device("mps" if has_mps else "cpu")
-    if key == "cpu":
-        return torch.device("cpu")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def add_common_train_args(parser: argparse.ArgumentParser) -> None:
@@ -67,6 +49,11 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--precision", type=str, default="32")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
+    parser.add_argument("--wandb-project", type=str, default="ece271b-final-project")
+    parser.add_argument("--wandb-entity", type=str, default=None)
+    parser.add_argument("--wandb-run-name", type=str, default=None)
+    parser.add_argument("--wandb-tags", type=str, default="")
+    parser.add_argument("--log-pointcloud-count", type=int, default=4)
     parser.add_argument("--geometry-only", action="store_true")
     parser.add_argument("--val-samples-per-segment", type=int, default=None)
     parser.add_argument("--auto-evaluate", dest="auto_evaluate", action="store_true")
@@ -91,6 +78,11 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--precision", type=str, default="32")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=Path("output/eval"))
+    parser.add_argument("--wandb-project", type=str, default="ece271b-final-project")
+    parser.add_argument("--wandb-entity", type=str, default=None)
+    parser.add_argument("--wandb-run-name", type=str, default=None)
+    parser.add_argument("--wandb-tags", type=str, default="")
+    parser.add_argument("--log-pointcloud-count", type=int, default=4)
 
 
 def add_common_render_args(parser: argparse.ArgumentParser) -> None:
@@ -178,6 +170,48 @@ def data_dir_for(args: argparse.Namespace) -> Path:
     return Path(args.data_dir) if args.data_dir is not None else selection.spec.default_data_dir
 
 
+def _wandb_tags(raw: str | None) -> list[str]:
+    if raw is None:
+        return []
+    return [part for part in (item.strip() for item in str(raw).split(",")) if part]
+
+
+def _default_wandb_name_prefix(selection) -> str:
+    return f"{selection.representation}-{selection.backbone}"
+
+
+def _generate_wandb_run_id() -> str:
+    return uuid.uuid4().hex[:8]
+
+
+def _wandb_name_timestamp() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def _default_wandb_run_name(selection, timestamp: str) -> str:
+    return f"{_default_wandb_name_prefix(selection)}-{str(timestamp)}"
+
+
+def build_wandb_logger(
+    args: argparse.Namespace,
+    selection,
+    *,
+    job_type: str,
+) -> WandbLogger:
+    run_id = _generate_wandb_run_id()
+    run_name = args.wandb_run_name or _default_wandb_run_name(selection, _wandb_name_timestamp())
+    return WandbLogger(
+        project=str(args.wandb_project),
+        entity=args.wandb_entity,
+        name=run_name,
+        save_dir=str(args.output_dir),
+        id=run_id,
+        tags=_wandb_tags(args.wandb_tags),
+        job_type=str(job_type),
+        log_model=False,
+    )
+
+
 def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
     selection = selection_for(args)
     val_samples_per_segment = getattr(args, "val_samples_per_segment", None)
@@ -203,7 +237,7 @@ def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
     )
 
 
-def configure_trainer(args: argparse.Namespace, logger: CSVLogger | bool, callbacks: list) -> L.Trainer:
+def configure_trainer(args: argparse.Namespace, logger, callbacks: list) -> L.Trainer:
     return L.Trainer(
         default_root_dir=str(getattr(args, "output_dir", Path("output"))),
         max_epochs=getattr(args, "max_epochs", 1),
@@ -235,8 +269,8 @@ def run_train(args: argparse.Namespace) -> None:
     datamodule = build_datamodule(args)
     model = selection.build_module(args)
 
-    logger = CSVLogger(save_dir=str(args.output_dir), name=selection.model_id)
-    run_dir = Path(logger.log_dir)
+    logger = build_wandb_logger(args, selection, job_type="train")
+    run_dir = Path(logger.save_dir) / selection.model_id / str(getattr(logger, "version", "run"))
     checkpoint_cb = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
         monitor="val_mIoU",
@@ -251,10 +285,12 @@ def run_train(args: argparse.Namespace) -> None:
         patience=int(args.early_stopping_patience),
         min_delta=float(args.early_stopping_min_delta),
     )
-    trainer = configure_trainer(args, logger, [checkpoint_cb, early_stopping_cb])
+    wandb_cb = WandbSegmentationCallback(log_pointcloud_count=int(args.log_pointcloud_count))
+    trainer = configure_trainer(args, logger, [checkpoint_cb, early_stopping_cb, wandb_cb])
     trainer.fit(model=model, datamodule=datamodule)
 
     if not bool(args.auto_evaluate):
+        logger.experiment.finish()
         return
 
     checkpoint_path = Path(checkpoint_cb.best_model_path or checkpoint_cb.last_model_path)
@@ -265,15 +301,26 @@ def run_train(args: argparse.Namespace) -> None:
     report_model = selection.load_from_checkpoint(checkpoint_path)
     report_device = resolve_runtime_device(args.accelerator)
     prepare_model_for_reporting(report_model, datamodule, report_device)
-    stage_reports = collect_stage_reports(report_model, datamodule, splits=("train", "val", "test"), device=report_device)
-    report_payload = write_report_bundle(
-        spec=selection,
-        checkpoint_path=checkpoint_path,
-        stage_reports=stage_reports,
-        output_dir=run_dir,
-        report_name="final_report",
+    evaluate_and_log_splits(
+        logger,
+        report_model,
+        datamodule,
+        splits=("train", "val", "test"),
+        device=report_device,
+        class_names=report_model.class_names,
+        step=trainer.global_step,
+        prefix="final",
     )
-    log_final_report_metrics(logger, report_payload, step=trainer.global_step)
+    log_audit_pointcloud_splits(
+        logger,
+        report_model,
+        datamodule,
+        splits=("train", "val", "test"),
+        count=int(args.log_pointcloud_count),
+        step=trainer.global_step,
+        prefix="final",
+    )
+    logger.experiment.finish()
 
 
 def run_evaluate(args: argparse.Namespace) -> None:
@@ -282,24 +329,32 @@ def run_evaluate(args: argparse.Namespace) -> None:
     datamodule = build_datamodule(args)
     model = selection.load_from_checkpoint(args.checkpoint)
     _validate_loaded_model_selection(model, selection)
+    logger = build_wandb_logger(args, selection, job_type="evaluate")
     requested_splits = parse_report_splits(args.splits)
     setup_datamodule_for_report(datamodule, requested_splits)
     report_device = resolve_runtime_device(args.accelerator)
     prepare_model_for_reporting(model, datamodule, report_device)
-    stage_reports = collect_stage_reports(
+    evaluate_and_log_splits(
+        logger=logger,
+        model=model,
+        datamodule=datamodule,
+        splits=requested_splits,
+        device=report_device,
+        class_names=model.class_names,
+        step=0,
+        prefix="eval",
+        max_batches=args.max_batches,
+    )
+    log_audit_pointcloud_splits(
+        logger,
         model,
         datamodule,
         splits=requested_splits,
-        device=report_device,
-        max_batches=args.max_batches,
+        count=int(args.log_pointcloud_count),
+        step=0,
+        prefix="eval",
     )
-    write_report_bundle(
-        spec=selection,
-        checkpoint_path=Path(args.checkpoint),
-        stage_reports=stage_reports,
-        output_dir=Path(args.output_dir),
-        report_name=f"{selection.model_id}_report",
-    )
+    logger.experiment.finish()
 
 
 def _choose_segment(args: argparse.Namespace, datasets: list) -> str:
@@ -335,7 +390,7 @@ def _sampled_point_frame(
 
 def run_render(args: argparse.Namespace) -> None:
     selection = selection_for(args)
-    device = resolve_device(args.device)
+    device = resolve_runtime_device(args.device)
     model = selection.load_from_checkpoint(args.checkpoint).to(device)
     _validate_loaded_model_selection(model, selection)
     model.eval()

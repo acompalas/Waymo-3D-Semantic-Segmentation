@@ -19,6 +19,18 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def load_class_names(path: str | Path, num_classes: int | None = None) -> list[str]:
+    root = Path(path)
+    payload = _read_json(root / "classes.json")
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected object in {root / 'classes.json'}")
+    mapping = {int(key): str(value) for key, value in payload.items()}
+    total = max([0, *(mapping.keys())]) + 1
+    if num_classes is not None:
+        total = max(total, int(num_classes))
+    return [mapping.get(idx, f"class_{idx}") for idx in range(total)]
+
+
 def load_segment_source_records(path: str | Path) -> list[dict[str, Any]]:
     root = Path(path)
     records = _read_json(root / "segment_source.json")

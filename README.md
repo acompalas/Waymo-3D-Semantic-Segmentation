@@ -102,8 +102,7 @@ python -m src.main train \
   --behavior diffusion \
   --backbone pointnet \
   --head mlp \
-  --diffusion-steps 200 \
-  --validation-prediction-mode full
+  --diffusion-steps 200
 
 python -m src.main train \
   --representation range_images \
@@ -134,8 +133,7 @@ python -m src.main evaluate \
   --behavior diffusion \
   --backbone crossattn_unet \
   --head denoising \
-  --checkpoint output/range_images__crossattn_unet__denoising__diffusion/.../checkpoints/last.ckpt \
-  --sampling-steps 50
+  --checkpoint output/range_images__crossattn_unet__denoising__diffusion/.../checkpoints/last.ckpt
 ```
 
 Render:
@@ -161,9 +159,10 @@ Common options:
 - `--train-subdirs`, `--val-subdirs`, `--test-subdirs`: choose source subsets from `segment_source.json`
 - `--batch-size`, `--num-points`, `--num-workers`, `--seed`
 - `--max-batches`: cap evaluation to the first N batches of each requested split; `0` means no limit
-- `--output-dir`: training/evaluation output root
+- `--output-dir`: W&B local cache/checkpoint root
+- `--wandb-project`, `--wandb-entity`, `--wandb-run-name`, `--wandb-tags`
+- `--log-pointcloud-count`: fixed audit point clouds per logged split; defaults to `4`
 - `--auto-evaluate` / `--no-auto-evaluate`: control whether training automatically runs the final checkpoint report pass
-- diffusion behaviors also accept `--validation-prediction-mode cheap|full`
 
 Important behavior:
 - dataset representation is inferred from `--representation`
@@ -180,24 +179,24 @@ Per epoch during training:
 - `train_loss`, `val_loss`, `test_loss` as available for the current loop
 - `train_acc`, `val_acc`, `test_acc`
 - `train_mIoU`, `val_mIoU`, `test_mIoU`
-- `train_IoU_class_<k>`, `val_IoU_class_<k>`, `test_IoU_class_<k>`
+- `train_IoU_<class_name>`, `val_IoU_<class_name>`, `test_IoU_<class_name>`
 
 Metric semantics:
 - confusion matrices and IoU only count elements under `valid_label`
-- class `0` is excluded from mIoU but still gets its own per-class IoU scalar
-- diffusion behaviors use `cheap` or `full` validation predictions according to `--validation-prediction-mode`
-- final report passes always use full denoising for diffusion behaviors
+- class `0` is excluded from mIoU and from displayed confusion matrices
+- diffusion validation/test metrics always use real denoising predictions
+- W&B confusion matrices and point-cloud artifacts are logged from the same filtered metrics contract
 
-Training outputs:
-- the usual Lightning CSV logs and checkpoints under the run directory
-- when auto-evaluation is enabled:
-  - `final_report.json`
-  - `train_confusion_raw.png`, `train_confusion_normalized.png`
-  - `val_confusion_raw.png`, `val_confusion_normalized.png`
-  - `test_confusion_raw.png`, `test_confusion_normalized.png`
+Training and evaluation outputs:
+- W&B is the only metrics/reporting backend
+- train and val confusion matrices are logged every epoch
+- train and val audit point clouds are logged every epoch
+- final/explicit evaluation logs train, val, and test metrics plus `4` audit point clouds per requested split
+- checkpoints are still written locally under `--output-dir`
 
-Evaluation outputs:
-- `python -m src.main evaluate ...` writes a structured JSON report plus raw and normalized confusion-matrix PNGs for the requested `--splits`
+Point-cloud visualization:
+- W&B point clouds are logged as RGB-colored `Object3D` artifacts
+- the run also logs a class legend table with class id, class name, and RGB color
 
 Render environment:
 - on Linux, the renderer sets `GDK_BACKEND=x11` and `XDG_SESSION_TYPE=x11` before importing Open3D

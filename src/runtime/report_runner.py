@@ -1,28 +1,12 @@
-from pathlib import Path
 import sys
 from typing import Iterable
 
-from lightning.pytorch.loggers import CSVLogger
 import torch
 from tqdm.auto import tqdm
 
 from ..data import WaymoLidarDataModule
-from .reporting import write_stage_report_bundle
+from .common import resolve_runtime_device
 from .stage_eval import StageReportAccumulator
-
-
-def resolve_runtime_device(accelerator_arg: str) -> torch.device:
-    key = str(accelerator_arg).lower()
-    if key in {"gpu", "cuda"}:
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if key == "mps":
-        has_mps = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
-        return torch.device("mps" if has_mps else "cpu")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def move_batch_to_device(batch, device: torch.device):
@@ -41,6 +25,8 @@ def prepare_model_for_reporting(model, datamodule: WaymoLidarDataModule, device:
     model.to(device)
     if hasattr(model, "set_class_weights") and datamodule.class_weights is not None:
         model.set_class_weights(datamodule.class_weights.to(device))
+    if hasattr(model, "set_class_names"):
+        model.set_class_names(list(datamodule.class_names))
     if hasattr(model, "prepare_runtime"):
         model.prepare_runtime()
     model.eval()
@@ -102,54 +88,33 @@ def evaluate_split(
             stage_output = model.compute_stage_output(
                 move_batch_to_device(batch, device),
                 stage=split,
-                prediction_mode="full",
                 evaluation=True,
             )
             accumulator.consume(stage_output)
     return accumulator.summary()
 
 
-def collect_stage_reports(
+def evaluate_and_log_splits(
+    logger,
     model,
     datamodule: WaymoLidarDataModule,
     *,
     splits: Iterable[str],
     device: torch.device,
+    class_names: list[str],
+    step: int,
+    prefix: str | None = None,
     max_batches: int = 0,
-) -> dict[str, dict]:
-    return {
-        stage: evaluate_split(model, datamodule, split=stage, device=device, max_batches=max_batches)
-        for stage in splits
-    }
+) -> None:
+    from .wandb_logging import log_stage_report_to_wandb
 
-
-def build_report_payload(*, spec, checkpoint_path: Path, stage_reports: dict[str, dict]) -> dict:
-    return {
-        "model": spec.model_id,
-        "representation": spec.representation,
-        "checkpoint": str(checkpoint_path),
-        "stages": stage_reports,
-    }
-
-
-def log_final_report_metrics(logger: CSVLogger, report_payload: dict, *, step: int) -> None:
-    metrics: dict[str, float] = {}
-    for stage, stage_payload in report_payload.get("stages", {}).items():
-        for key, value in stage_payload.get("metrics", {}).items():
-            metrics[f"final_{stage}_{key}"] = float(value)
-    if metrics:
-        logger.log_metrics(metrics, step=step)
-        logger.save()
-
-
-def write_report_bundle(
-    *,
-    spec,
-    checkpoint_path: Path,
-    stage_reports: dict[str, dict],
-    output_dir: Path,
-    report_name: str,
-) -> dict:
-    report_payload = build_report_payload(spec=spec, checkpoint_path=checkpoint_path, stage_reports=stage_reports)
-    write_stage_report_bundle(output_dir, report_name=report_name, payload=report_payload)
-    return report_payload
+    for stage in splits:
+        stage_payload = evaluate_split(model, datamodule, split=stage, device=device, max_batches=max_batches)
+        log_stage_report_to_wandb(
+            logger,
+            stage=stage,
+            stage_payload=stage_payload,
+            class_names=class_names,
+            step=step,
+            prefix=prefix,
+        )

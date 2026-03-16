@@ -1,12 +1,92 @@
 import json
 from pathlib import Path
 
+from lightning.pytorch.loggers import CSVLogger
 import numpy as np
 
 
 def _write_json(path: Path, payload: dict | list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+class FakeWandbTable:
+    def __init__(self, columns=None, data=None, rows=None, **_kwargs) -> None:
+        self.columns = list(columns or [])
+        self.data = list(data or rows or [])
+
+
+class FakeWandbObject3D:
+    def __init__(self, data_or_path, caption=None, **_kwargs) -> None:
+        self.data = data_or_path
+        self.caption = caption
+
+
+class FakeWandbRun:
+    def __init__(self) -> None:
+        self.logged: list[tuple[dict, int | None]] = []
+        self.finished = False
+        self.hparams: list[dict] = []
+
+    def log(self, payload: dict, step: int | None = None) -> None:
+        self.logged.append((dict(payload), step))
+
+    def log_metrics(self, metrics: dict, step: int | None = None) -> None:
+        self.log(metrics, step=step)
+
+    def log_hparams(self, params: dict) -> None:
+        self.hparams.append(dict(params))
+
+    def save(self) -> None:
+        return None
+
+    def finish(self) -> None:
+        self.finished = True
+
+
+class FakeWandbLogger(CSVLogger):
+    instances: list["FakeWandbLogger"] = []
+
+    def __init__(
+        self,
+        *,
+        project: str,
+        entity=None,
+        name: str | None = None,
+        save_dir: str | None = None,
+        id: str | None = None,
+        tags=None,
+        job_type: str | None = None,
+        log_model: bool = False,
+    ) -> None:
+        super().__init__(save_dir=str(save_dir or "."), name=str(name or "wandb"))
+        self.project = project
+        self.entity = entity
+        self.id = id
+        self.tags = list(tags or [])
+        self.job_type = job_type
+        self.log_model = log_model
+        self._experiment = FakeWandbRun()
+        FakeWandbLogger.instances.append(self)
+
+    @property
+    def experiment(self) -> FakeWandbRun:
+        return self._experiment
+
+
+class FakeWandbModule:
+    Table = FakeWandbTable
+    Object3D = FakeWandbObject3D
+
+    @staticmethod
+    def plot_table(*, vega_spec_name: str, data_table, fields: dict, string_fields=None, split_table: bool = False):
+        return {
+            "vega_spec_name": vega_spec_name,
+            "table": data_table,
+            "fields": dict(fields),
+            "string_fields": dict(string_fields or {}),
+            "split_table": bool(split_table),
+        }
 
 
 def build_synthetic_preprocessed_roots(base_dir: Path) -> tuple[Path, Path]:

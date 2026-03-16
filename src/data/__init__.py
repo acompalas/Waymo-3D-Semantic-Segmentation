@@ -2,6 +2,7 @@ from .datamodule import WaymoLidarDataModule
 from .preprocessed import (
     PreprocessedPointCloudDataset,
     PreprocessedRangeImageDataset,
+    load_class_names,
     load_segment_source_records,
     source_segments_map,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "PreprocessedRangeImageDataset",
     "SceneShuffleBatchSampler",
     "WaymoLidarDataModule",
+    "load_class_names",
     "load_segment_source_records",
     "source_segments_map",
 ]
