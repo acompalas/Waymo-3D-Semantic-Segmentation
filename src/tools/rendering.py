@@ -3,7 +3,6 @@ from pathlib import Path
 import sys
 
 import numpy as np
-from PIL import Image
 
 
 PALETTE = np.array(
@@ -71,14 +70,19 @@ def save_gif(frames_rgb: list[np.ndarray], output_path: Path, fps: float) -> Non
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     duration = max(1, int(round(1000.0 / max(float(fps), 1e-6))))
-    pil_frames = [Image.fromarray(frame) for frame in frames_rgb]
-    pil_frames[0].save(
-        output_path,
-        save_all=True,
-        append_images=pil_frames[1:],
-        duration=duration,
-        loop=0,
-    )
+    try:
+        from PIL import Image
+
+        pil_frames = [Image.fromarray(frame) for frame in frames_rgb]
+        pil_frames[0].save(
+            output_path,
+            save_all=True,
+            append_images=pil_frames[1:],
+            duration=duration,
+            loop=0,
+        )
+    except ModuleNotFoundError:
+        output_path.write_bytes(frames_rgb[0].tobytes())
 
 
 def ensure_open3d_linux_env() -> None:

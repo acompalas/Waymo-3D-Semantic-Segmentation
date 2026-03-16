@@ -11,12 +11,16 @@ import torch
 
 from .data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
 from .runtime import (
-    MODEL_REGISTRY,
+    backbone_choices,
+    behavior_choices,
     collect_stage_reports,
-    get_model_spec,
+    get_model_selection,
+    head_choices,
     log_final_report_metrics,
+    maybe_add_component_train_args,
     parse_report_splits,
     prepare_model_for_reporting,
+    representation_choices,
     resolve_runtime_device,
     setup_datamodule_for_report,
     write_report_bundle,
@@ -63,6 +67,7 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--precision", type=str, default="32")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
+    parser.add_argument("--geometry-only", action="store_true")
     parser.add_argument("--auto-evaluate", dest="auto_evaluate", action="store_true")
     parser.add_argument("--no-auto-evaluate", dest="auto_evaluate", action="store_false")
     parser.set_defaults(auto_evaluate=True)
@@ -107,26 +112,46 @@ def add_common_render_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "mps", "cpu"])
 
 
-def build_parser(model_id: str | None = None) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Unified LiDAR semantic segmentation CLI.")
+def add_component_args(
+    parser: argparse.ArgumentParser,
+    *,
+    representation: str | None = None,
+    behavior: str | None = None,
+) -> None:
+    parser.add_argument("--representation", type=str, required=True, choices=representation_choices())
+    parser.add_argument("--behavior", type=str, required=True, choices=behavior_choices(representation))
+    parser.add_argument("--backbone", type=str, required=True, choices=backbone_choices(representation, behavior))
+    parser.add_argument("--head", type=str, required=True, choices=head_choices(representation, behavior))
+
+
+def build_parser(
+    *,
+    command: str | None = None,
+    representation: str | None = None,
+    behavior: str | None = None,
+    backbone: str | None = None,
+    head: str | None = None,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Componentized LiDAR semantic segmentation CLI.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for command in ("train", "evaluate", "render"):
-        sub = subparsers.add_parser(command)
-        sub.add_argument("--model", type=str, required=True, choices=sorted(MODEL_REGISTRY))
-        if command == "train":
+    for name in ("train", "evaluate", "render"):
+        sub = subparsers.add_parser(name)
+        add_component_args(sub, representation=representation if command == name else None, behavior=behavior if command == name else None)
+        if name == "train":
             add_common_train_args(sub)
-        elif command == "evaluate":
+            if command == "train":
+                maybe_add_component_train_args(
+                    sub,
+                    representation=representation,
+                    behavior=behavior,
+                    backbone=backbone,
+                    head=head,
+                )
+        elif name == "evaluate":
             add_common_eval_args(sub)
         else:
             add_common_render_args(sub)
-
-        if model_id is not None:
-            try:
-                spec = get_model_spec(model_id)
-            except KeyError:
-                continue
-            spec.add_train_args(sub)
 
     return parser
 
@@ -135,20 +160,30 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     argv = list(sys.argv[1:] if argv is None else argv)
     base_parser = build_parser()
     known, _ = base_parser.parse_known_args(argv)
-    full_parser = build_parser(getattr(known, "model", None))
+    full_parser = build_parser(
+        command=getattr(known, "command", None),
+        representation=getattr(known, "representation", None),
+        behavior=getattr(known, "behavior", None),
+        backbone=getattr(known, "backbone", None),
+        head=getattr(known, "head", None),
+    )
     return full_parser.parse_args(argv)
 
 
+def selection_for(args: argparse.Namespace):
+    return get_model_selection(args.representation, args.backbone, args.head, args.behavior)
+
+
 def data_dir_for(args: argparse.Namespace) -> Path:
-    spec = get_model_spec(args.model)
-    return Path(args.data_dir) if args.data_dir is not None else spec.default_data_dir
+    selection = selection_for(args)
+    return Path(args.data_dir) if args.data_dir is not None else selection.spec.default_data_dir
 
 
 def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
-    spec = get_model_spec(args.model)
+    selection = selection_for(args)
     return WaymoLidarDataModule(
         data_dir=data_dir_for(args),
-        representation=spec.representation,
+        representation=selection.representation,
         batch_size=args.batch_size,
         num_points=args.num_points,
         num_classes=args.num_classes,
@@ -179,13 +214,25 @@ def configure_trainer(args: argparse.Namespace, logger: CSVLogger | bool, callba
     )
 
 
+def _validate_loaded_model_selection(model, selection) -> None:
+    expected = {
+        "backbone": selection.backbone,
+        "head": selection.head,
+        "behavior": selection.behavior,
+    }
+    for key, value in expected.items():
+        loaded = str(getattr(model.hparams, key))
+        if loaded != value:
+            raise ValueError(f"Checkpoint {key}='{loaded}' does not match CLI selection '{value}'.")
+
+
 def run_train(args: argparse.Namespace) -> None:
-    spec = get_model_spec(args.model)
+    selection = selection_for(args)
     L.seed_everything(args.seed, workers=True)
     datamodule = build_datamodule(args)
-    model = spec.build_module(args)
+    model = selection.build_module(args)
 
-    logger = CSVLogger(save_dir=str(args.output_dir), name=args.model)
+    logger = CSVLogger(save_dir=str(args.output_dir), name=selection.model_id)
     run_dir = Path(logger.log_dir)
     checkpoint_cb = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
@@ -212,12 +259,12 @@ def run_train(args: argparse.Namespace) -> None:
         raise FileNotFoundError(f"Unable to locate checkpoint after training: {checkpoint_path}")
 
     setup_datamodule_for_report(datamodule, ("train", "val", "test"))
-    report_model = spec.load_from_checkpoint(checkpoint_path)
+    report_model = selection.load_from_checkpoint(checkpoint_path)
     report_device = resolve_runtime_device(args.accelerator)
     prepare_model_for_reporting(report_model, datamodule, report_device)
     stage_reports = collect_stage_reports(report_model, datamodule, splits=("train", "val", "test"), device=report_device)
     report_payload = write_report_bundle(
-        spec=spec,
+        spec=selection,
         checkpoint_path=checkpoint_path,
         stage_reports=stage_reports,
         output_dir=run_dir,
@@ -227,10 +274,11 @@ def run_train(args: argparse.Namespace) -> None:
 
 
 def run_evaluate(args: argparse.Namespace) -> None:
-    spec = get_model_spec(args.model)
+    selection = selection_for(args)
     L.seed_everything(args.seed, workers=True)
     datamodule = build_datamodule(args)
-    model = spec.load_from_checkpoint(args.checkpoint)
+    model = selection.load_from_checkpoint(args.checkpoint)
+    _validate_loaded_model_selection(model, selection)
     model.set_sampling_steps(args.sampling_steps)
     requested_splits = parse_report_splits(args.splits)
     setup_datamodule_for_report(datamodule, requested_splits)
@@ -244,11 +292,11 @@ def run_evaluate(args: argparse.Namespace) -> None:
         max_batches=args.max_batches,
     )
     write_report_bundle(
-        spec=spec,
+        spec=selection,
         checkpoint_path=Path(args.checkpoint),
         stage_reports=stage_reports,
         output_dir=Path(args.output_dir),
-        report_name=f"{args.model}_report",
+        report_name=f"{selection.model_id}_report",
     )
 
 
@@ -284,9 +332,10 @@ def _sampled_point_frame(
 
 
 def run_render(args: argparse.Namespace) -> None:
-    spec = get_model_spec(args.model)
+    selection = selection_for(args)
     device = resolve_device(args.device)
-    model = spec.load_from_checkpoint(args.checkpoint).to(device)
+    model = selection.load_from_checkpoint(args.checkpoint).to(device)
+    _validate_loaded_model_selection(model, selection)
     model.eval()
     model.set_sampling_steps(args.sampling_steps)
 
@@ -301,7 +350,7 @@ def run_render(args: argparse.Namespace) -> None:
     )
     datasets = [point_dataset]
     range_dataset = None
-    if spec.representation == "range_images":
+    if selection.representation == "range_images":
         range_dataset = PreprocessedRangeImageDataset(
             path=data_dir_for(args),
             source_subdirs=source_subdirs,
@@ -316,7 +365,7 @@ def run_render(args: argparse.Namespace) -> None:
 
     rendered_frames: list[np.ndarray] = []
     for _, (_, timestamp) in enumerate(frames):
-        if spec.representation == "point_clouds":
+        if selection.representation == "point_clouds":
             point_frame = _sampled_point_frame(point_dataset, segment=segment, timestamp=timestamp)
         else:
             point_frame = point_dataset.get_dense_frame(segment, timestamp)

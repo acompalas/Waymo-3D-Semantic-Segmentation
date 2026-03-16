@@ -1,9 +1,9 @@
 import argparse
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
-import json
-import os
 from unittest.mock import patch
 
 import lightning as L
@@ -14,14 +14,8 @@ import torch
 
 from src.data import WaymoLidarDataModule
 from src.main import run_evaluate, run_render, run_train
-from src.models import (
-    LinearSVMPointClassifier,
-    PointCloudDiffusionSegmenter,
-    PointCloudSupervisedSegmenter,
-    RangeImageDiffusionSegmenter,
-    RangeImageUNetSegmenter,
-)
-from src.runtime import get_model_spec
+from src.models import PointCloudTaskModel, RangeImageTaskModel
+from src.runtime import get_model_selection
 from src.tools.rendering import ensure_open3d_linux_env
 from tests.helpers import build_synthetic_preprocessed_roots
 
@@ -83,29 +77,27 @@ class EndToEndSmokeTests(unittest.TestCase):
             max_cached_segments=1,
         )
 
-    def test_checkpoint_round_trip_for_all_models(self) -> None:
+    def test_checkpoint_round_trip_for_representative_models(self) -> None:
         configs = [
-            (LinearSVMPointClassifier(num_classes=23, knn_scales=(2,), knn_support_size=8, knn_query_chunk=8), self._point_dm()),
-            (RangeImageUNetSegmenter(num_classes=23, base_channels=4, depth=2), self._range_dm()),
-            (RangeImageDiffusionSegmenter(num_classes=23, base_channels=4, diffusion_steps=4), self._range_dm()),
             (
-                PointCloudSupervisedSegmenter(
-                    num_classes=23,
-                    hidden_dim=32,
-                    depth=2,
-                    backbone="pointnet",
-                ),
+                PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised"),
                 self._point_dm(),
             ),
             (
-                PointCloudDiffusionSegmenter(
-                    num_classes=23,
-                    hidden_dim=32,
-                    depth=2,
-                    diffusion_steps=4,
-                    backbone="pointnet",
-                ),
+                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, backbone="pointnet", head="mlp", behavior="supervised"),
                 self._point_dm(),
+            ),
+            (
+                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, diffusion_steps=4, backbone="pointnet", head="mlp", behavior="diffusion"),
+                self._point_dm(),
+            ),
+            (
+                RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", head="segmentation", behavior="supervised"),
+                self._range_dm(),
+            ),
+            (
+                RangeImageTaskModel(num_classes=23, base_channels=4, diffusion_steps=4, backbone="crossattn_unet", head="denoising", behavior="diffusion"),
+                self._range_dm(),
             ),
         ]
         for idx, (model, datamodule) in enumerate(configs):
@@ -113,43 +105,21 @@ class EndToEndSmokeTests(unittest.TestCase):
             loaded = model.__class__.load_from_checkpoint(str(ckpt_path))
             self.assertIsInstance(loaded, model.__class__)
 
-    def test_point_diffusion_loads_legacy_checkpoint_without_geometry_only_hparam(self) -> None:
-        model = PointCloudDiffusionSegmenter(
-            num_classes=23,
-            hidden_dim=32,
-            depth=2,
-            diffusion_steps=4,
-            backbone="pointnet",
-            geometry_only=False,
-        )
-        ckpt_path = _fit_and_save(model, self._point_dm(), self.base_dir / "legacy_point_diffusion")
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
-        checkpoint["hyper_parameters"].pop("geometry_only", None)
-        legacy_ckpt_path = self.base_dir / "legacy_point_diffusion.ckpt"
-        torch.save(checkpoint, legacy_ckpt_path)
-
-        loaded = PointCloudDiffusionSegmenter.load_from_checkpoint(str(legacy_ckpt_path))
-        self.assertIsInstance(loaded, PointCloudDiffusionSegmenter)
-        self.assertTrue(loaded.geometry_only_enabled)
-
     def test_render_smoke_for_point_and_range_models(self) -> None:
-        point_ckpt = _fit_and_save(
-            LinearSVMPointClassifier(num_classes=23, knn_scales=(2,), knn_support_size=8, knn_query_chunk=8),
-            self._point_dm(),
-            self.base_dir / "render_point",
-        )
-        range_ckpt = _fit_and_save(
-            RangeImageUNetSegmenter(num_classes=23, base_channels=4, depth=2),
-            self._range_dm(),
-            self.base_dir / "render_range",
-        )
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised")
+        point_ckpt = _fit_and_save(point_model, self._point_dm(), self.base_dir / "render_point")
+        range_model = RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", head="segmentation", behavior="supervised")
+        range_ckpt = _fit_and_save(range_model, self._range_dm(), self.base_dir / "render_range")
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
         with patch("src.main.render_point_cloud", return_value=fake_frame):
             run_render(
                 argparse.Namespace(
                     command="render",
-                    model="point_svm",
+                    representation="point_clouds",
+                    behavior="supervised",
+                    backbone="handcrafted",
+                    head="mlp",
                     checkpoint=point_ckpt,
                     data_dir=self.point_root,
                     point_data_dir=self.point_root,
@@ -171,7 +141,10 @@ class EndToEndSmokeTests(unittest.TestCase):
             run_render(
                 argparse.Namespace(
                     command="render",
-                    model="range_unet",
+                    representation="range_images",
+                    behavior="supervised",
+                    backbone="unet",
+                    head="segmentation",
                     checkpoint=range_ckpt,
                     data_dir=self.range_root,
                     point_data_dir=self.point_root,
@@ -195,11 +168,8 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertTrue((self.base_dir / "range.gif").exists())
 
     def test_run_render_uses_shared_model_interface(self) -> None:
-        point_ckpt = _fit_and_save(
-            LinearSVMPointClassifier(num_classes=23, knn_scales=(2,), knn_support_size=8, knn_query_chunk=8),
-            self._point_dm(),
-            self.base_dir / "render_contract",
-        )
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised")
+        point_ckpt = _fit_and_save(point_model, self._point_dm(), self.base_dir / "render_contract")
 
         calls: list[tuple[bool, bool]] = []
 
@@ -215,14 +185,17 @@ class EndToEndSmokeTests(unittest.TestCase):
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
         with patch("src.main.render_point_cloud", return_value=fake_frame), patch.object(
-            LinearSVMPointClassifier,
+            PointCloudTaskModel,
             "predict_segmented_pointcloud",
             side_effect=fake_predict_segmented_pointcloud,
         ):
             run_render(
                 argparse.Namespace(
                     command="render",
-                    model="point_svm",
+                    representation="point_clouds",
+                    behavior="supervised",
+                    backbone="handcrafted",
+                    head="mlp",
                     checkpoint=point_ckpt,
                     data_dir=self.point_root,
                     point_data_dir=self.point_root,
@@ -245,11 +218,8 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertEqual(calls, [(True, False)])
 
     def test_run_render_limits_point_model_inputs_to_render_num_points(self) -> None:
-        point_ckpt = _fit_and_save(
-            LinearSVMPointClassifier(num_classes=23, knn_scales=(2,), knn_support_size=8, knn_query_chunk=8),
-            self._point_dm(),
-            self.base_dir / "render_point_limit",
-        )
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised")
+        point_ckpt = _fit_and_save(point_model, self._point_dm(), self.base_dir / "render_point_limit")
 
         observed_point_count: list[int] = []
 
@@ -266,14 +236,17 @@ class EndToEndSmokeTests(unittest.TestCase):
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
         with patch("src.main.render_point_cloud", return_value=fake_frame), patch.object(
-            LinearSVMPointClassifier,
+            PointCloudTaskModel,
             "predict_segmented_pointcloud",
             side_effect=fake_predict_segmented_pointcloud,
         ):
             run_render(
                 argparse.Namespace(
                     command="render",
-                    model="point_svm",
+                    representation="point_clouds",
+                    behavior="supervised",
+                    backbone="handcrafted",
+                    head="mlp",
                     checkpoint=point_ckpt,
                     data_dir=self.point_root,
                     point_data_dir=self.point_root,
@@ -297,12 +270,15 @@ class EndToEndSmokeTests(unittest.TestCase):
 
     def test_train_writes_final_report_artifacts_and_uses_checkpoint_reload(self) -> None:
         output_dir = self.base_dir / "train_outputs"
-        spec = get_model_spec("point_svm")
-        with patch.object(spec.module_cls, "load_from_checkpoint", wraps=spec.module_cls.load_from_checkpoint) as load_mock:
+        selection = get_model_selection("point_clouds", "handcrafted", "mlp", "supervised")
+        with patch.object(selection.spec.module_cls, "load_from_checkpoint", wraps=selection.spec.module_cls.load_from_checkpoint) as load_mock:
             run_train(
                 argparse.Namespace(
                     command="train",
-                    model="point_svm",
+                    representation="point_clouds",
+                    behavior="supervised",
+                    backbone="handcrafted",
+                    head="mlp",
                     data_dir=self.point_root,
                     train_subdirs="training",
                     val_subdirs="validation",
@@ -315,6 +291,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                     worker_start_method="spawn",
                     max_epochs=1,
                     lr=1e-3,
+                    weight_decay=1e-4,
                     no_balanced_class_weights=False,
                     early_stopping_patience=2,
                     early_stopping_min_delta=0.0,
@@ -326,8 +303,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                     seed=0,
                     output_dir=output_dir,
                     auto_evaluate=True,
-                    svm_reg=1e-4,
-                    margin=1.0,
+                    geometry_only=False,
                     knn_scales="2",
                     knn_support_size=8,
                     knn_query_chunk=8,
@@ -335,7 +311,7 @@ class EndToEndSmokeTests(unittest.TestCase):
             )
 
         self.assertGreaterEqual(load_mock.call_count, 1)
-        run_dir = next((output_dir / "point_svm").glob("version_*"))
+        run_dir = next((output_dir / selection.model_id).glob("version_*"))
         report_path = run_dir / "final_report.json"
         self.assertTrue(report_path.exists())
         payload = json.loads(report_path.read_text(encoding="utf-8"))
@@ -345,10 +321,14 @@ class EndToEndSmokeTests(unittest.TestCase):
 
     def test_train_can_skip_auto_evaluation(self) -> None:
         output_dir = self.base_dir / "train_no_eval"
+        selection = get_model_selection("point_clouds", "handcrafted", "mlp", "supervised")
         run_train(
             argparse.Namespace(
                 command="train",
-                model="point_svm",
+                representation="point_clouds",
+                behavior="supervised",
+                backbone="handcrafted",
+                head="mlp",
                 data_dir=self.point_root,
                 train_subdirs="training",
                 val_subdirs="validation",
@@ -361,6 +341,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 worker_start_method="spawn",
                 max_epochs=1,
                 lr=1e-3,
+                weight_decay=1e-4,
                 no_balanced_class_weights=False,
                 early_stopping_patience=2,
                 early_stopping_min_delta=0.0,
@@ -372,27 +353,27 @@ class EndToEndSmokeTests(unittest.TestCase):
                 seed=0,
                 output_dir=output_dir,
                 auto_evaluate=False,
-                svm_reg=1e-4,
-                margin=1.0,
+                geometry_only=False,
                 knn_scales="2",
                 knn_support_size=8,
                 knn_query_chunk=8,
             )
         )
-        run_dir = next((output_dir / "point_svm").glob("version_*"))
+        run_dir = next((output_dir / selection.model_id).glob("version_*"))
         self.assertFalse((run_dir / "final_report.json").exists())
 
     def test_evaluate_writes_requested_split_report(self) -> None:
-        ckpt_path = _fit_and_save(
-            LinearSVMPointClassifier(num_classes=23, knn_scales=(2,), knn_support_size=8, knn_query_chunk=8),
-            self._point_dm(),
-            self.base_dir / "eval_ckpt",
-        )
+        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised")
+        ckpt_path = _fit_and_save(model, self._point_dm(), self.base_dir / "eval_ckpt")
         output_dir = self.base_dir / "eval_report"
+        selection = get_model_selection("point_clouds", "handcrafted", "mlp", "supervised")
         run_evaluate(
             argparse.Namespace(
                 command="evaluate",
-                model="point_svm",
+                representation="point_clouds",
+                behavior="supervised",
+                backbone="handcrafted",
+                head="mlp",
                 checkpoint=ckpt_path,
                 data_dir=self.point_root,
                 test_subdirs="validation",
@@ -412,7 +393,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 output_dir=output_dir,
             )
         )
-        report_path = output_dir / "point_svm_report.json"
+        report_path = output_dir / f"{selection.model_id}_report.json"
         self.assertTrue(report_path.exists())
         payload = json.loads(report_path.read_text(encoding="utf-8"))
         self.assertEqual(sorted(payload["stages"]), ["test"])

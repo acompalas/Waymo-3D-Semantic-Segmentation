@@ -1,24 +1,54 @@
 import unittest
 
 from src.main import parse_args
-from src.runtime import MODEL_REGISTRY
+from src.runtime import backbone_choices, get_model_selection, head_choices, representation_choices
 
 
 class RegistryCliTests(unittest.TestCase):
-    def test_registry_has_expected_models(self) -> None:
-        self.assertEqual(
-            sorted(MODEL_REGISTRY),
-            ["point_diffusion", "point_supervised", "point_svm", "range_diffusion", "range_unet"],
-        )
+    def test_registry_has_expected_representations(self) -> None:
+        self.assertEqual(representation_choices(), ["point_clouds", "range_images"])
 
-    def test_train_parser_adds_model_specific_args(self) -> None:
+    def test_point_supervised_parser_accepts_component_selection(self) -> None:
         args = parse_args(
             [
                 "train",
-                "--model",
-                "point_diffusion",
+                "--representation",
+                "point_clouds",
+                "--behavior",
+                "supervised",
+                "--backbone",
+                "handcrafted",
+                "--head",
+                "mlp",
+                "--proj-dim",
+                "64",
+                "--proj-depth",
+                "2",
+                "--geometry-only",
+                "--no-auto-evaluate",
+            ]
+        )
+        self.assertEqual(args.command, "train")
+        self.assertEqual(args.representation, "point_clouds")
+        self.assertEqual(args.behavior, "supervised")
+        self.assertEqual(args.backbone, "handcrafted")
+        self.assertEqual(args.head, "mlp")
+        self.assertEqual(args.proj_dim, 64)
+        self.assertEqual(args.proj_depth, 2)
+        self.assertTrue(args.geometry_only)
+
+    def test_point_diffusion_parser_adds_behavior_args(self) -> None:
+        args = parse_args(
+            [
+                "train",
+                "--representation",
+                "point_clouds",
+                "--behavior",
+                "diffusion",
                 "--backbone",
                 "pointnet",
+                "--head",
+                "mlp",
                 "--diffusion-steps",
                 "8",
                 "--validation-prediction-mode",
@@ -26,72 +56,35 @@ class RegistryCliTests(unittest.TestCase):
                 "--no-auto-evaluate",
             ]
         )
-        self.assertEqual(args.command, "train")
-        self.assertEqual(args.model, "point_diffusion")
-        self.assertEqual(args.backbone, "pointnet")
         self.assertEqual(args.diffusion_steps, 8)
         self.assertEqual(args.validation_prediction_mode, "full")
-        self.assertFalse(args.auto_evaluate)
 
-    def test_train_parser_adds_point_supervised_args(self) -> None:
-        args = parse_args(
-            [
-                "train",
-                "--model",
-                "point_supervised",
-                "--backbone",
-                "pointnet",
-                "--geometry-only",
-                "--no-auto-evaluate",
-            ]
-        )
-        self.assertEqual(args.command, "train")
-        self.assertEqual(args.model, "point_supervised")
-        self.assertEqual(args.backbone, "pointnet")
-        self.assertTrue(args.geometry_only)
-
-    def test_render_parser_accepts_range_model(self) -> None:
+    def test_range_render_parser_accepts_requested_components(self) -> None:
         args = parse_args(
             [
                 "render",
-                "--model",
-                "range_unet",
+                "--representation",
+                "range_images",
+                "--behavior",
+                "supervised",
+                "--backbone",
+                "unet",
+                "--head",
+                "segmentation",
                 "--checkpoint",
                 "fake.ckpt",
             ]
         )
         self.assertEqual(args.command, "render")
-        self.assertEqual(args.model, "range_unet")
+        self.assertEqual(args.backbone, "unet")
 
-    def test_evaluate_parser_accepts_requested_splits(self) -> None:
-        args = parse_args(
-            [
-                "evaluate",
-                "--model",
-                "point_svm",
-                "--checkpoint",
-                "fake.ckpt",
-                "--splits",
-                "train,val,test",
-                "--max-batches",
-                "3",
-            ]
-        )
-        self.assertEqual(args.command, "evaluate")
-        self.assertEqual(args.splits, "train,val,test")
-        self.assertEqual(args.max_batches, 3)
+    def test_registry_filters_choices_by_behavior(self) -> None:
+        self.assertEqual(backbone_choices("point_clouds", "diffusion"), ["edgeconv", "pointnet"])
+        self.assertEqual(head_choices("range_images", "diffusion"), ["denoising"])
 
-    def test_existing_models_accept_geometry_only_flag(self) -> None:
-        args = parse_args(
-            [
-                "train",
-                "--model",
-                "range_unet",
-                "--geometry-only",
-                "--no-auto-evaluate",
-            ]
-        )
-        self.assertTrue(args.geometry_only)
+    def test_selection_builds_composite_model_id(self) -> None:
+        selection = get_model_selection("point_clouds", "edgeconv", "mlp", "supervised")
+        self.assertEqual(selection.model_id, "point_clouds__edgeconv__mlp__supervised")
 
 
 if __name__ == "__main__":

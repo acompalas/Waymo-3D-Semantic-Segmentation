@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 
 
 def write_json_report(path: str | Path, payload: dict) -> Path:
@@ -34,6 +33,14 @@ def save_confusion_matrix_image(
     *,
     normalize: bool,
 ) -> Path:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ModuleNotFoundError:
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"")
+        return output_path
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

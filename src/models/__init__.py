@@ -1,13 +1,6 @@
-from .point_diffusion import PointCloudDiffusionSegmenter
-from .point_supervised import PointCloudSupervisedSegmenter
-from .point_svm import LinearSVMPointClassifier
-from .range_diffusion import RangeImageDiffusionSegmenter
-from .range_unet import RangeImageUNetSegmenter
+from .task_models import PointCloudTaskModel, RangeImageTaskModel
 
 __all__ = [
-    "LinearSVMPointClassifier",
-    "PointCloudDiffusionSegmenter",
-    "PointCloudSupervisedSegmenter",
-    "RangeImageDiffusionSegmenter",
-    "RangeImageUNetSegmenter",
+    "PointCloudTaskModel",
+    "RangeImageTaskModel",
 ]

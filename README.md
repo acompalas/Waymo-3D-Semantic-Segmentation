@@ -1,18 +1,40 @@
 # Unified LiDAR Segmentation Trainers
 
-This repository exposes one package and one CLI for all supported LiDAR semantic segmentation models.
+This repository exposes one package and one CLI for LiDAR semantic segmentation with explicit component selection.
 
-## Models
-- `point_svm`: point-cloud baseline using handcrafted local geometry features plus a linear SVM-style head
-- `point_supervised`: supervised point-cloud model with `edgeconv` or `pointnet` backbone
-- `range_unet`: supervised range-image U-Net
-- `range_diffusion`: diffusion model in range-image space
-- `point_diffusion`: diffusion model in point-cloud space with `edgeconv` or `pointnet` backbone
+## Architecture
+- `representation`: `point_clouds` or `range_images`
+- `backbone`: feature extractor or conditioner
+- `head`: output projection module
+- `behavior`: supervised or diffusion training/inference policy
+
+Primary model classes:
+- `PointCloudTaskModel`
+- `RangeImageTaskModel`
+
+Point-cloud backbones:
+- `edgeconv`
+- `pointnet`
+- `pointnetplusplus`
+- `handcrafted`
+
+Range-image backbones:
+- `unet`
+- `crossattn_unet`
+
+Heads:
+- point: `mlp`
+- range supervised: `segmentation`
+- range diffusion: `denoising`
+
+Behaviors:
+- `supervised`
+- `diffusion`
 
 ## Layout
 - `src/data`: preprocessed dataset loading, dense frame access, datamodule, scene-aware batching
-- `src/models`: all trainable model families, shared diffusion utilities, and representation-specific model bases
-- `src/runtime`: model registry and CLI dispatch metadata
+- `src/models`: task models, backbones, heads, behaviors, and shared diffusion utilities
+- `src/runtime`: component registries and CLI dispatch metadata
 - `src/tools`: rendering helpers
 - `src/main.py`: public CLI entrypoint
 - `data_pipeline`: preprocessing tools that build the range-image and dense point-cloud artifacts consumed by `src`
@@ -32,8 +54,6 @@ Range-model rendering also uses the paired dense point-cloud artifacts from `dat
 ## Model Prediction Contract
 All models expose one primary inference contract: produce a segmented point cloud for a frame.
 
-The shared method is:
-
 ```python
 predict_segmented_pointcloud(
     *,
@@ -52,8 +72,8 @@ Returned keys:
 Representation-specific behavior:
 - point-cloud models consume `point_frame` directly
 - range-image models consume `range_frame` and project predictions onto the paired dense point cloud in `point_frame`
-- diffusion models denoise internally; when `sampling_steps` is omitted they use the model's trained diffusion schedule
-- non-diffusion models ignore `sampling_steps`
+- diffusion behaviors denoise internally; when `sampling_steps` is omitted they use the model's trained diffusion schedule
+- supervised behaviors ignore `sampling_steps`
 - `--geometry-only` drops non-geometry inputs:
   - point-cloud models use `xyz` instead of `xyz + point_features`
   - range-image models use `range` instead of all 4 channels
@@ -62,54 +82,96 @@ Representation-specific behavior:
 Train:
 
 ```bash
-python -m src.main train --model point_svm
-python -m src.main train --model point_supervised --backbone edgeconv
-python -m src.main train --model point_supervised --backbone pointnetplusplus
-python -m src.main train --model range_unet
-python -m src.main train --model range_diffusion --diffusion-steps 200 --validation-prediction-mode cheap
-python -m src.main train --model point_diffusion --backbone edgeconv --diffusion-steps 200 --validation-prediction-mode full
-python -m src.main train --model point_svm --geometry-only --no-auto-evaluate
+python -m src.main train \
+  --representation point_clouds \
+  --behavior supervised \
+  --backbone handcrafted \
+  --head mlp
+
+python -m src.main train \
+  --representation point_clouds \
+  --behavior supervised \
+  --backbone edgeconv \
+  --head mlp
+
+python -m src.main train \
+  --representation point_clouds \
+  --behavior diffusion \
+  --backbone pointnet \
+  --head mlp \
+  --diffusion-steps 200 \
+  --validation-prediction-mode full
+
+python -m src.main train \
+  --representation range_images \
+  --behavior supervised \
+  --backbone unet \
+  --head segmentation
+
+python -m src.main train \
+  --representation range_images \
+  --behavior diffusion \
+  --backbone crossattn_unet \
+  --head denoising \
+  --diffusion-steps 200
 ```
 
 Evaluate:
 
 ```bash
-python -m src.main evaluate --model range_unet --checkpoint output/range_unet/.../checkpoints/last.ckpt
-python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
-python -m src.main evaluate --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
-python -m src.main evaluate --model point_supervised --backbone pointnetplusplus --checkpoint output/point_supervised/.../checkpoints/last.ckpt
-python -m src.main evaluate --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt --splits train,val,test
-python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --splits val --max-batches 4 --sampling-steps 5
+python -m src.main evaluate \
+  --representation point_clouds \
+  --behavior supervised \
+  --backbone handcrafted \
+  --head mlp \
+  --checkpoint output/point_clouds__handcrafted__mlp__supervised/.../checkpoints/last.ckpt
+
+python -m src.main evaluate \
+  --representation range_images \
+  --behavior diffusion \
+  --backbone crossattn_unet \
+  --head denoising \
+  --checkpoint output/range_images__crossattn_unet__denoising__diffusion/.../checkpoints/last.ckpt \
+  --sampling-steps 50
 ```
 
 Render:
 
 ```bash
-python -m src.main render --model range_diffusion --checkpoint output/range_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
-python -m src.main render --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt
-python -m src.main render --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
-python -m src.main render --model point_supervised --backbone pointnetplusplus --checkpoint output/point_supervised/.../checkpoints/last.ckpt
+python -m src.main render \
+  --representation point_clouds \
+  --behavior supervised \
+  --backbone handcrafted \
+  --head mlp \
+  --checkpoint output/point_clouds__handcrafted__mlp__supervised/.../checkpoints/last.ckpt
+
+python -m src.main render \
+  --representation range_images \
+  --behavior supervised \
+  --backbone unet \
+  --head segmentation \
+  --checkpoint output/range_images__unet__segmentation__supervised/.../checkpoints/last.ckpt
 ```
 
 Common options:
-- `--data-dir`: override the model’s default preprocessed root
+- `--data-dir`: override the component selection's default preprocessed root
 - `--train-subdirs`, `--val-subdirs`, `--test-subdirs`: choose source subsets from `segment_source.json`
 - `--batch-size`, `--num-points`, `--num-workers`, `--seed`
 - `--max-batches`: cap evaluation to the first N batches of each requested split; `0` means no limit
 - `--output-dir`: training/evaluation output root
 - `--auto-evaluate` / `--no-auto-evaluate`: control whether training automatically runs the final checkpoint report pass
-- diffusion models also accept `--validation-prediction-mode cheap|full`
-- all trainable model families accept `--geometry-only`
+- diffusion behaviors also accept `--validation-prediction-mode cheap|full`
 
 Important behavior:
-- dataset representation is inferred from `--model`
+- dataset representation is inferred from `--representation`
+- valid backbone/head combinations are derived from the runtime registries
 - class balancing, masking, scene splitting, and checkpoint/runtime behavior come from the shared `src/data` and `src/models` stack
 - evaluation metrics only use `valid_label` and exclude class `0`
 - point-cloud frames with fewer than `--num-points` valid geometry elements are dropped during dataset construction
 - when a point-cloud frame has more than `--num-points` valid geometry elements, subsampling prefers `valid_label=True` points before filling from the remaining geometry-valid points
 
 ## Metrics And Reports
-All models now use the same metric pipeline.
+All models use the same metric pipeline.
 
 Per epoch during training:
 - `train_loss`, `val_loss`, `test_loss` as available for the current loop
@@ -120,11 +182,11 @@ Per epoch during training:
 Metric semantics:
 - confusion matrices and IoU only count elements under `valid_label`
 - class `0` is excluded from mIoU but still gets its own per-class IoU scalar
-- diffusion models use `cheap` or `full` validation predictions according to `--validation-prediction-mode`
-- final report passes always use full denoising for diffusion models
+- diffusion behaviors use `cheap` or `full` validation predictions according to `--validation-prediction-mode`
+- final report passes always use full denoising for diffusion behaviors
 
 Training outputs:
-- the usual Lightning CSV logs and checkpoints under the model run directory
+- the usual Lightning CSV logs and checkpoints under the run directory
 - when auto-evaluation is enabled:
   - `final_report.json`
   - `train_confusion_raw.png`, `train_confusion_normalized.png`
@@ -161,19 +223,8 @@ python data_pipeline/preprocess_point_clouds.py \
   --overwrite
 ```
 
-Notes:
-- `preprocess_range_images.py` can treat selected source subdirectories as unlabeled via `--unlabeled-subdirs`
-- both scripts support `--num-workers` for segment-level parallelism
-- the point-cloud preprocessing step depends on the range-image preprocessing output
-
-## Extending With A New Model
-1. Add the Lightning module under `src/models`.
-2. Register it in [`src/runtime/registry.py`](/home/logan/Desktop/271b_final_project_2/src/runtime/registry.py).
-3. Provide:
-   - a stable model id
-   - the required representation (`point_clouds` or `range_images`)
-   - model-specific CLI args
-   - a module factory
-4. Implement the shared segmented point-cloud prediction contract in the appropriate representation base.
-
-If the model uses an existing batch contract, no dataloader changes are needed.
+## Extending With A New Component
+1. Add the backbone, head, or behavior under `src/models`.
+2. Register it in `src/runtime/registry.py`.
+3. Declare its valid representation/behavior combinations.
+4. If it reuses an existing batch contract, no dataloader changes are needed.

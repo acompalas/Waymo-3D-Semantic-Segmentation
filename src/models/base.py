@@ -296,6 +296,17 @@ class PointCloudSegmentationModel(SegmentationLightningModule):
 
 
 class RangeImageSegmentationModel(SegmentationLightningModule):
+    @staticmethod
+    def _resolve_point_valid_geometry(payload: dict, labels: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
+        valid_geometry = payload.get("valid_geometry")
+        if valid_geometry is None:
+            if isinstance(labels, torch.Tensor):
+                return torch.ones_like(labels, dtype=torch.bool)
+            return np.ones(labels.shape, dtype=bool)
+        if isinstance(valid_geometry, torch.Tensor):
+            return valid_geometry.bool()
+        return np.asarray(valid_geometry, dtype=bool)
+
     def _build_range_batch(self, range_frame: dict) -> dict:
         return {
             "range_images": torch.from_numpy(range_frame["range_images"]).unsqueeze(0).to(device=self.device),
