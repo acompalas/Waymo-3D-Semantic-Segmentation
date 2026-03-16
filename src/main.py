@@ -271,13 +271,12 @@ def _sampled_point_frame(
     segment: str,
     timestamp: int,
 ) -> dict:
-    frame_idx = dataset.resolve_frame_index(segment, timestamp)
-    sampled = dataset[frame_idx]
+    dataset_idx = dataset.resolve_dataset_index(segment, timestamp)
+    sampled = dataset[dataset_idx]
     return {
         "xyz": sampled["points"].detach().cpu().numpy().astype(np.float32, copy=False),
         "point_features": sampled["point_features"].detach().cpu().numpy().astype(np.float32, copy=False),
         "labels": sampled["labels"].detach().cpu().numpy().astype(np.int64, copy=False),
-        "valid_geometry": sampled["valid_geometry"].detach().cpu().numpy().astype(bool, copy=False),
         "valid_label": sampled["valid_label"].detach().cpu().numpy().astype(bool, copy=False),
         "segment_context_name": str(sampled["segment_context_name"]),
         "frame_timestamp_micros": int(sampled["frame_timestamp_micros"]),

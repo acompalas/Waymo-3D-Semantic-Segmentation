@@ -37,6 +37,18 @@ class DataAndModelTests(unittest.TestCase):
         self.assertGreater(point_ds.compute_class_counts(23).sum(), 0)
         self.assertGreater(range_ds.compute_class_counts(23).sum(), 0)
 
+    def test_point_dataset_returns_only_sampled_valid_geometry_points(self) -> None:
+        point_ds = PreprocessedPointCloudDataset(self.point_root, source_subdirs="training", num_points=8, seed=0)
+
+        sample = point_ds[0]
+        self.assertNotIn("valid_geometry", sample)
+        self.assertTrue(bool(sample["valid_label"].all()))
+        self.assertEqual(tuple(sample["points"].shape), (8, 3))
+
+    def test_point_dataset_drops_frames_without_enough_valid_geometry(self) -> None:
+        with self.assertRaises(ValueError):
+            PreprocessedPointCloudDataset(self.point_root, source_subdirs="training", num_points=31)
+
     def test_datamodule_computes_class_weights(self) -> None:
         dm = WaymoLidarDataModule(
             data_dir=self.point_root,

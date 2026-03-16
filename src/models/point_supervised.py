@@ -87,13 +87,13 @@ class PointCloudSupervisedSegmenter(PointCloudSegmentationModel):
         points = batch["points"].float()
         point_features = batch["point_features"].float()
         labels = batch["labels"].long()
-        valid_geometry = batch["valid_geometry"].bool()
         valid_label = batch["valid_label"].bool()
+        valid_geometry = self._resolve_point_valid_geometry(batch, labels)
         batch_size = int(points.shape[0])
 
         logits = self._predict_logits(points, point_features, valid_geometry)
         preds = logits.argmax(dim=-1)
-        metric_mask = valid_geometry & valid_label & (labels > 0)
+        metric_mask = valid_label
         if not bool(metric_mask.any()):
             loss = logits.sum() * 0.0
             return {

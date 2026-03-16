@@ -117,10 +117,9 @@ class MultiScaleKnnEigenFeatureExtractor(nn.Module):
             dim=1,
         )
 
-    def forward(self, points: torch.Tensor, point_features: torch.Tensor, valid_geometry: torch.Tensor) -> torch.Tensor:
+    def forward(self, points: torch.Tensor, point_features: torch.Tensor) -> torch.Tensor:
         points = points.float()
         point_features = point_features.float()
-        valid_geometry = valid_geometry.bool()
         batch_size, num_points, _ = points.shape
         out = points.new_zeros((batch_size, num_points, self.out_dim))
 
@@ -128,7 +127,7 @@ class MultiScaleKnnEigenFeatureExtractor(nn.Module):
         for batch_idx in range(batch_size):
             finite_points = torch.isfinite(points[batch_idx]).all(dim=1)
             finite_features = torch.isfinite(point_features[batch_idx]).all(dim=1)
-            valid = valid_geometry[batch_idx] & finite_points & finite_features
+            valid = finite_points & finite_features
             if not bool(valid.any()):
                 continue
 

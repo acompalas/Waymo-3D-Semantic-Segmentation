@@ -120,13 +120,13 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         self,
         model_inputs: torch.Tensor,
         labels: torch.Tensor,
-        valid_geometry: torch.Tensor,
+        valid_label: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
+        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_label)
         t = torch.ones(model_inputs.shape[0], device=self.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
         eps_pred = self.model(x_t, t, model_inputs)
-        loss = self.ddpm.loss(eps_pred, eps, valid_geometry, labels=labels, class_weights=None, class_dim=2)
+        loss = self.ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=None, class_dim=2)
         sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
         sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
         x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
@@ -136,13 +136,13 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         self,
         model_inputs: torch.Tensor,
         labels: torch.Tensor,
-        valid_geometry: torch.Tensor,
+        valid_label: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_geometry)
+        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_label)
         t = torch.randint(1, self.ddpm.T + 1, (model_inputs.shape[0],), device=self.device, dtype=torch.long)
         x_t, eps = self.ddpm.q_sample(x0, t)
         eps_pred = self.model(x_t, t, model_inputs)
-        loss = self.ddpm.loss(eps_pred, eps, valid_geometry, labels=labels, class_weights=self.class_weights, class_dim=2)
+        loss = self.ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=self.class_weights, class_dim=2)
         sqrt_ab = self.ddpm._extract(self.ddpm.sqrt_alpha_bars, t, x_t.shape)
         sqrt_1mab = self.ddpm._extract(self.ddpm.sqrt_one_minus_ab, t, x_t.shape)
         x0_est = (x_t - sqrt_1mab * eps_pred) / sqrt_ab.clamp(min=1e-6)
@@ -160,12 +160,12 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
         points = batch["points"].float()
         point_features = batch["point_features"].float()
         labels = batch["labels"].long()
-        valid_geometry = batch["valid_geometry"].bool()
         valid_label = batch["valid_label"].bool()
+        valid_geometry = self._resolve_point_valid_geometry(batch, labels)
         batch_size = int(points.shape[0])
         model_inputs = self._model_inputs(points, point_features)
         if evaluation:
-            loss, cheap_preds = self._evaluation_loss(model_inputs, labels, valid_geometry)
+            loss, cheap_preds = self._evaluation_loss(model_inputs, labels, valid_label)
             if prediction_mode == "full":
                 preds = self.predict_point_labels(
                     points,
@@ -176,9 +176,9 @@ class PointCloudDiffusionSegmenter(PointCloudSegmentationModel):
             else:
                 preds = torch.where(valid_geometry, cheap_preds, torch.zeros_like(cheap_preds))
         else:
-            loss, preds = self._training_loss_and_predictions(model_inputs, labels, valid_geometry)
+            loss, preds = self._training_loss_and_predictions(model_inputs, labels, valid_label)
 
-        metric_mask = valid_geometry & valid_label & (labels > 0)
+        metric_mask = valid_label
         return {
             "loss": loss,
             "preds": preds,

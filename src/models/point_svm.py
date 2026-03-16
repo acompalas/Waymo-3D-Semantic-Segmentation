@@ -59,8 +59,11 @@ class RunningFeatureStandardizer(nn.Module):
         self.running_mean.copy_(new_mean)
         self.running_count.fill_(new_count)
 
-    def forward(self, x: torch.Tensor, valid_mask: torch.Tensor, *, update_running: bool) -> torch.Tensor:
-        valid = valid_mask.bool()
+    def forward(self, x: torch.Tensor, valid_mask: torch.Tensor | None = None, *, update_running: bool) -> torch.Tensor:
+        if valid_mask is None:
+            valid = torch.ones(x.shape[:2], dtype=torch.bool, device=x.device)
+        else:
+            valid = valid_mask.bool()
         valid_x = x[valid]
 
         if bool(valid_x.numel() > 0 and update_running):
@@ -105,7 +108,6 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
         self,
         points: torch.Tensor,
         point_features: torch.Tensor,
-        valid_geometry: torch.Tensor,
         *,
         update_running: bool = False,
     ) -> torch.Tensor:
@@ -113,8 +115,8 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
             point_features,
             geometry_only=bool(self.hparams.geometry_only),
         )
-        features = self.feature_extractor(points, point_features, valid_geometry)
-        features = self.feature_standardizer(features, valid_geometry, update_running=update_running)
+        features = self.feature_extractor(points, point_features)
+        features = self.feature_standardizer(features, update_running=update_running)
         return self.classifier(features)
 
     def predict_point_labels(
@@ -125,10 +127,10 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
         *,
         sampling_steps: int | None = None,
     ) -> torch.Tensor:
+        _ = valid_geometry
         _ = sampling_steps
-        scores = self._predict_scores(points, point_features, valid_geometry, update_running=False)
-        preds = scores.argmax(dim=-1)
-        return torch.where(valid_geometry, preds, torch.zeros_like(preds))
+        scores = self._predict_scores(points, point_features, update_running=False)
+        return scores.argmax(dim=-1)
 
     def _compute_stage_output(
         self,
@@ -142,18 +144,16 @@ class LinearSVMPointClassifier(PointCloudSegmentationModel):
         points = batch["points"].float()
         point_features = batch["point_features"].float()
         labels = batch["labels"].long()
-        valid_geometry = batch["valid_geometry"].bool()
         valid_label = batch["valid_label"].bool()
         batch_size = int(points.shape[0])
 
         scores = self._predict_scores(
             points,
             point_features,
-            valid_geometry,
             update_running=bool(stage == "train" and not evaluation),
         )
         preds = scores.argmax(dim=-1)
-        metric_mask = valid_geometry & valid_label & (labels > 0)
+        metric_mask = valid_label
         if not bool(metric_mask.any()):
             loss = self.classifier.weight.sum() * 0.0
             return {

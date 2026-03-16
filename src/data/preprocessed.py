@@ -134,12 +134,8 @@ class _BasePreprocessedDataset(Dataset[dict[str, Any]]):
             source_subdirs=source_subdirs,
             segments=segments,
         )
-        self.records, self._frames = _build_records(self.segments_root, self.segment_names)
-        self.segment_names = sorted({seg for seg, _, _ in self._frames})
-        self._frame_lookup = {(seg, ts): frame_idx for seg, frame_idx, ts in self._frames}
-        self._segment_frames: dict[str, list[tuple[int, int]]] = {}
-        for seg, frame_idx, ts in self._frames:
-            self._segment_frames.setdefault(seg, []).append((int(frame_idx), int(ts)))
+        _, frames = _build_records(self.segments_root, self.segment_names)
+        self._set_frames(frames)
 
         self.max_cached_segments = max(1, int(max_cached_segments))
         self.rng = np.random.default_rng(seed)
@@ -155,6 +151,22 @@ class _BasePreprocessedDataset(Dataset[dict[str, Any]]):
 
     def frames_for_segment(self, segment: str) -> list[tuple[int, int]]:
         return list(self._segment_frames.get(str(segment), []))
+
+    def resolve_dataset_index(self, segment: str, timestamp: int) -> int:
+        key = (str(segment), int(timestamp))
+        if key not in self._dataset_index_lookup:
+            raise KeyError(f"Unknown frame key: {key}")
+        return int(self._dataset_index_lookup[key])
+
+    def _set_frames(self, frames: Sequence[tuple[str, int, int]]) -> None:
+        self._frames = [(str(seg), int(frame_idx), int(ts)) for seg, frame_idx, ts in frames]
+        self.records = [(seg, ts) for seg, _, ts in self._frames]
+        self.segment_names = sorted({seg for seg, _, _ in self._frames})
+        self._frame_lookup = {(seg, ts): frame_idx for seg, frame_idx, ts in self._frames}
+        self._dataset_index_lookup = {(seg, ts): dataset_idx for dataset_idx, (seg, _, ts) in enumerate(self._frames)}
+        self._segment_frames: dict[str, list[tuple[int, int]]] = {}
+        for seg, frame_idx, ts in self._frames:
+            self._segment_frames.setdefault(seg, []).append((frame_idx, ts))
 
 
 @dataclass
@@ -285,6 +297,12 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
         max_cached_segments: int = 4,
         seed: int = 0,
     ) -> None:
+        self.num_points = int(num_points)
+        if self.num_points <= 0:
+            raise ValueError(f"num_points must be > 0, got {self.num_points}")
+        self.seed = int(seed)
+        self.deterministic_sampling = bool(deterministic_sampling)
+        self._cache: OrderedDict[str, _PointSegmentCacheEntry] = OrderedDict()
         super().__init__(
             path=path,
             source_subdirs=source_subdirs,
@@ -292,10 +310,7 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
             max_cached_segments=max_cached_segments,
             seed=seed,
         )
-        self.num_points = int(num_points)
-        self.seed = int(seed)
-        self.deterministic_sampling = bool(deterministic_sampling)
-        self._cache: OrderedDict[str, _PointSegmentCacheEntry] = OrderedDict()
+        self._filter_frames_with_min_geometry()
 
     def _load_segment(self, segment: str) -> _PointSegmentCacheEntry:
         if segment in self._cache:
@@ -329,42 +344,64 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
             "frame_timestamp_micros": int(timestamp),
         }
 
-    def _sample_or_pad(
+    def _filter_frames_with_min_geometry(self) -> None:
+        kept_frames: list[tuple[str, int, int]] = []
+        dropped = 0
+        for segment in self.segment_names:
+            entry = self._load_segment(segment)
+            valid_counts = entry.valid_geometry.reshape(entry.valid_geometry.shape[0], -1).sum(axis=1)
+            for frame_idx, timestamp in self.frames_for_segment(segment):
+                if int(valid_counts[frame_idx]) >= self.num_points:
+                    kept_frames.append((segment, frame_idx, timestamp))
+                else:
+                    dropped += 1
+
+        if not kept_frames:
+            raise ValueError(
+                f"No point-cloud frames under {self.path} contain at least {self.num_points} valid geometry points."
+            )
+
+        if dropped > 0:
+            warnings.warn(
+                f"Dropping {dropped} point-cloud frames with fewer than {self.num_points} valid geometry points.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        self._set_frames(kept_frames)
+
+    def _sample_points(
         self,
         points: np.ndarray,
         point_features: np.ndarray,
         labels: np.ndarray,
         valid_label: np.ndarray,
         rng: np.random.Generator,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         target = self.num_points
         count = points.shape[0]
+        if count < target:
+            raise RuntimeError(
+                f"Frame has only {count} valid geometry points, fewer than required num_points={target}."
+            )
 
-        out_p = np.zeros((target, 3), dtype=np.float32)
-        out_f = np.zeros((target, 2), dtype=np.float32)
-        out_y = np.full((target,), -1, dtype=np.int64)
-        out_geom = np.zeros((target,), dtype=bool)
-        out_vlabel = np.zeros((target,), dtype=bool)
-
-        if count == 0:
-            return out_p, out_f, out_y, out_geom, out_vlabel
-
-        if count >= target:
+        preferred = np.flatnonzero(valid_label)
+        if preferred.size >= target:
+            idx = rng.choice(preferred, size=target, replace=False)
+        elif preferred.size == count:
             idx = rng.choice(count, size=target, replace=False)
-            out_p[:] = points[idx]
-            out_f[:] = point_features[idx]
-            out_y[:] = labels[idx]
-            out_geom[:] = True
-            out_vlabel[:] = valid_label[idx]
-            return out_p, out_f, out_y, out_geom, out_vlabel
+        else:
+            other = np.flatnonzero(~valid_label)
+            need = target - preferred.size
+            supplement = rng.choice(other, size=need, replace=False)
+            idx = np.concatenate([preferred.astype(np.int64, copy=False), supplement.astype(np.int64, copy=False)])
+            idx = rng.permutation(idx)
 
-        order = rng.permutation(count)
-        out_p[:count] = points[order]
-        out_f[:count] = point_features[order]
-        out_y[:count] = labels[order]
-        out_geom[:count] = True
-        out_vlabel[:count] = valid_label[order]
-        return out_p, out_f, out_y, out_geom, out_vlabel
+        return (
+            points[idx].astype(np.float32, copy=False),
+            point_features[idx].astype(np.float32, copy=False),
+            labels[idx].astype(np.int64, copy=False),
+            valid_label[idx].astype(bool, copy=False),
+        )
 
     def _frame_seed(self, segment: str, timestamp: int) -> int:
         payload = f"{segment}:{int(timestamp)}:{self.seed}".encode("utf-8")
@@ -392,7 +429,7 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
         else:
             rng = self.rng
 
-        points, point_features, labels, geom_mask, sampled_label_mask = self._sample_or_pad(
+        points, point_features, labels, sampled_label_mask = self._sample_points(
             points=points,
             point_features=point_features,
             labels=labels,
@@ -404,7 +441,6 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
             "points": torch.from_numpy(points).float(),
             "point_features": torch.from_numpy(point_features).float(),
             "labels": torch.from_numpy(labels).long(),
-            "valid_geometry": torch.from_numpy(geom_mask),
             "valid_label": torch.from_numpy(sampled_label_mask),
             "segment_context_name": frame["segment_context_name"],
             "frame_timestamp_micros": frame["frame_timestamp_micros"],
@@ -414,8 +450,12 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
         counts = np.zeros(int(num_classes), dtype=np.int64)
         for segment in _progress_segments(self.segment_names, desc="Counting point-cloud class labels"):
             entry = self._load_segment(segment)
-            sem = entry.semantic.reshape(-1).astype(np.int64, copy=False)
-            valid_label = entry.valid_label.reshape(-1).astype(bool, copy=False)
+            frame_indices = [frame_idx for frame_idx, _ in self.frames_for_segment(segment)]
+            if not frame_indices:
+                continue
+            frame_sel = np.asarray(frame_indices, dtype=np.int64)
+            sem = entry.semantic[frame_sel].reshape(-1).astype(np.int64, copy=False)
+            valid_label = entry.valid_label[frame_sel].reshape(-1).astype(bool, copy=False)
             classes = sem[valid_label]
             if classes.size == 0:
                 continue

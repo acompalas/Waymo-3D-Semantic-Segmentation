@@ -206,12 +206,11 @@ class EndToEndSmokeTests(unittest.TestCase):
         def fake_predict_segmented_pointcloud(*, point_frame, range_frame=None, sampling_steps=None):
             _ = sampling_steps
             calls.append((point_frame is not None, range_frame is not None))
-            valid_geometry = point_frame["valid_geometry"].reshape(-1).astype(bool, copy=False)
             return {
-                "points_xyz": point_frame["xyz"].reshape(-1, 3)[valid_geometry].astype(np.float32, copy=False),
-                "pred_labels": point_frame["labels"].reshape(-1)[valid_geometry].astype(np.int64, copy=False),
-                "true_labels": point_frame["labels"].reshape(-1)[valid_geometry].astype(np.int64, copy=False),
-                "valid_label": point_frame["valid_label"].reshape(-1)[valid_geometry].astype(bool, copy=False),
+                "points_xyz": point_frame["xyz"].reshape(-1, 3).astype(np.float32, copy=False),
+                "pred_labels": point_frame["labels"].reshape(-1).astype(np.int64, copy=False),
+                "true_labels": point_frame["labels"].reshape(-1).astype(np.int64, copy=False),
+                "valid_label": point_frame["valid_label"].reshape(-1).astype(bool, copy=False),
             }
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -258,12 +257,11 @@ class EndToEndSmokeTests(unittest.TestCase):
             _ = range_frame
             _ = sampling_steps
             observed_point_count.append(int(point_frame["xyz"].reshape(-1, 3).shape[0]))
-            valid_geometry = point_frame["valid_geometry"].reshape(-1).astype(bool, copy=False)
             return {
-                "points_xyz": point_frame["xyz"].reshape(-1, 3)[valid_geometry].astype(np.float32, copy=False),
-                "pred_labels": point_frame["labels"].reshape(-1)[valid_geometry].astype(np.int64, copy=False),
-                "true_labels": point_frame["labels"].reshape(-1)[valid_geometry].astype(np.int64, copy=False),
-                "valid_label": point_frame["valid_label"].reshape(-1)[valid_geometry].astype(bool, copy=False),
+                "points_xyz": point_frame["xyz"].reshape(-1, 3).astype(np.float32, copy=False),
+                "pred_labels": point_frame["labels"].reshape(-1).astype(np.int64, copy=False),
+                "true_labels": point_frame["labels"].reshape(-1).astype(np.int64, copy=False),
+                "valid_label": point_frame["valid_label"].reshape(-1).astype(bool, copy=False),
             }
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)

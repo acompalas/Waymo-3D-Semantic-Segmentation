@@ -105,6 +105,8 @@ Important behavior:
 - dataset representation is inferred from `--model`
 - class balancing, masking, scene splitting, and checkpoint/runtime behavior come from the shared `src/data` and `src/models` stack
 - evaluation metrics only use `valid_label` and exclude class `0`
+- point-cloud frames with fewer than `--num-points` valid geometry elements are dropped during dataset construction
+- when a point-cloud frame has more than `--num-points` valid geometry elements, subsampling prefers `valid_label=True` points before filling from the remaining geometry-valid points
 
 ## Metrics And Reports
 All models now use the same metric pipeline.

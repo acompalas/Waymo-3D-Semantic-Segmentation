@@ -225,6 +225,17 @@ class SegmentationLightningModule(L.LightningModule):
 
 
 class PointCloudSegmentationModel(SegmentationLightningModule):
+    @staticmethod
+    def _resolve_point_valid_geometry(payload: dict, labels: np.ndarray | torch.Tensor) -> np.ndarray | torch.Tensor:
+        valid_geometry = payload.get("valid_geometry")
+        if valid_geometry is None:
+            if isinstance(labels, torch.Tensor):
+                return torch.ones_like(labels, dtype=torch.bool)
+            return np.ones(labels.shape, dtype=bool)
+        if isinstance(valid_geometry, torch.Tensor):
+            return valid_geometry.bool()
+        return np.asarray(valid_geometry, dtype=bool)
+
     def _dense_points(
         self,
         point_frame: dict,
@@ -232,7 +243,7 @@ class PointCloudSegmentationModel(SegmentationLightningModule):
         xyz = point_frame["xyz"].reshape(-1, 3)
         point_features = point_frame["point_features"].reshape(-1, 2)
         labels = point_frame["labels"].reshape(-1)
-        valid_geometry = point_frame["valid_geometry"].reshape(-1).astype(bool, copy=False)
+        valid_geometry = self._resolve_point_valid_geometry(point_frame, labels).reshape(-1).astype(bool, copy=False)
         valid_label = point_frame["valid_label"].reshape(-1).astype(bool, copy=False)
 
         valid_idx = np.flatnonzero(valid_geometry)
@@ -308,7 +319,7 @@ class RangeImageSegmentationModel(SegmentationLightningModule):
         self.prepare_runtime()
         batch = self._build_range_batch(range_frame)
         preds, labels = self.predict_range_labels(batch, sampling_steps=self.resolve_sampling_steps(sampling_steps))
-        valid_geometry = point_frame["valid_geometry"].reshape(-1).astype(bool, copy=False)
+        valid_geometry = self._resolve_point_valid_geometry(point_frame, point_frame["labels"].reshape(-1)).reshape(-1)
         valid_label = point_frame["valid_label"].reshape(-1).astype(bool, copy=False)
         points = point_frame["xyz"].reshape(-1, 3)[valid_geometry]
 
