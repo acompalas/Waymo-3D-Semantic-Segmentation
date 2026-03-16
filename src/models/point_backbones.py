@@ -34,7 +34,9 @@ def knn_indices(xyz: torch.Tensor, k: int) -> torch.Tensor:
 
 
 class ResMLPBlock(nn.Module):
-    def __init__(self, dim: int, time_dim: int | None = None, dropout: float = 0.1) -> None:
+    def __init__(
+        self, dim: int, time_dim: int | None = None, dropout: float = 0.1
+    ) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         self.fc1 = nn.Linear(dim, dim)
@@ -43,18 +45,24 @@ class ResMLPBlock(nn.Module):
         self.t_proj = nn.Linear(int(time_dim), dim) if time_dim is not None else None
         self.drop = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor, t_emb: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, t_emb: torch.Tensor | None = None
+    ) -> torch.Tensor:
         h = self.fc1(F.silu(self.norm1(x)))
         if self.t_proj is not None:
             if t_emb is None:
-                raise ValueError("Time embedding is required for time-conditioned blocks.")
+                raise ValueError(
+                    "Time embedding is required for time-conditioned blocks."
+                )
             h = h + self.t_proj(t_emb)[:, None, :]
         h = self.fc2(self.drop(F.silu(self.norm2(h))))
         return x + h
 
 
 class EdgeConvBlock(nn.Module):
-    def __init__(self, dim: int, time_dim: int | None = None, dropout: float = 0.1) -> None:
+    def __init__(
+        self, dim: int, time_dim: int | None = None, dropout: float = 0.1
+    ) -> None:
         super().__init__()
         self.edge_mlp = nn.Sequential(
             nn.LayerNorm(dim * 2 + 3),
@@ -92,7 +100,9 @@ class EdgeConvBlock(nn.Module):
         h = self.post(edge_feat.max(dim=2).values)
         if self.t_proj is not None:
             if t_emb is None:
-                raise ValueError("Time embedding is required for time-conditioned blocks.")
+                raise ValueError(
+                    "Time embedding is required for time-conditioned blocks."
+                )
             h = h + self.t_proj(t_emb)[:, None, :]
         return x + h
 
@@ -122,7 +132,10 @@ class PointNetBackbone(nn.Module):
 
         self.in_proj = nn.Linear(int(input_dim), int(hidden_dim))
         self.blocks = nn.ModuleList(
-            [ResMLPBlock(int(hidden_dim), block_time_dim, dropout=dropout) for _ in range(int(depth))]
+            [
+                ResMLPBlock(int(hidden_dim), block_time_dim, dropout=dropout)
+                for _ in range(int(depth))
+            ]
         )
         self.global_proj = nn.Sequential(
             nn.LayerNorm(int(hidden_dim)),
@@ -132,10 +145,14 @@ class PointNetBackbone(nn.Module):
         )
         self.output_dim = int(hidden_dim)
 
-    def forward(self, inputs: torch.Tensor, *, t: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, inputs: torch.Tensor, *, t: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if self.uses_time:
             if t is None:
-                raise ValueError("PointNetBackbone requires diffusion timesteps when time conditioning is enabled.")
+                raise ValueError(
+                    "PointNetBackbone requires diffusion timesteps when time conditioning is enabled."
+                )
             t_emb = self.time_embed(t)
         else:
             t_emb = None
@@ -144,6 +161,218 @@ class PointNetBackbone(nn.Module):
         for block in self.blocks:
             x = block(x, t_emb)
         return x + self.global_proj(x.max(dim=1).values)[:, None, :]
+
+
+class PointNetPlusPlusBackbone(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int = 256,
+        sa_configs: list[tuple[int, float, int, list[int]]] | None = None,
+        fp_mlp_configs: list[list[int]] | None = None,
+        dropout: float = 0.1,
+    ) -> None:
+        super().__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.dropout = float(dropout)
+
+        if sa_configs is None:
+            sa_configs = [
+                (1024, 0.1, 32, [32, 32, 64]),
+                (256, 0.2, 32, [64, 64, 128]),
+                (64, 0.4, 32, [128, 128, 256]),
+                (16, 0.8, 32, [256, 256, 512]),
+            ]
+        if fp_mlp_configs is None:
+            fp_mlp_configs = [
+                [256, 256],
+                [256, 256],
+                [256, 128],
+                [128, 128, 128],
+            ]
+
+        self.sa_layers = nn.ModuleList(
+            [
+                PointNetSetAbstraction(
+                    npoint=npoint,
+                    radius=radius,
+                    nsample=nsample,
+                    mlp=mlp,
+                    use_xyz=True,
+                    in_channels=(self.input_dim - 3 if idx == 0 else sa_configs[idx - 1][3][-1]),
+                )
+                for idx, (npoint, radius, nsample, mlp) in enumerate(sa_configs)
+            ]
+        )
+        fp_in_channels = [
+            sa_configs[2][3][-1] + sa_configs[3][3][-1],
+            sa_configs[1][3][-1] + fp_mlp_configs[0][-1],
+            sa_configs[0][3][-1] + fp_mlp_configs[1][-1],
+            (self.input_dim - 3) + fp_mlp_configs[2][-1],
+        ]
+        self.fp_layers = nn.ModuleList(
+            [
+                PointNetFeaturePropagation(in_channels=in_ch, mlp=mlp)
+                for in_ch, mlp in zip(fp_in_channels, fp_mlp_configs)
+            ]
+        )
+        self.post_mlp = nn.Sequential(
+            nn.Conv1d(int(fp_mlp_configs[-1][-1]), int(hidden_dim), 1),
+            nn.SiLU(),
+            nn.Dropout(self.dropout),
+            nn.Conv1d(int(hidden_dim), int(hidden_dim), 1),
+        )
+        self.output_dim = int(hidden_dim)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        xyz = inputs[..., :3].contiguous()
+        features = inputs[..., 3:].contiguous()
+        features = features if features.shape[-1] > 0 else None
+
+        l_xyz = [xyz]
+        l_features = [features]
+        for sa in self.sa_layers:
+            new_xyz, new_features = sa(l_xyz[-1], l_features[-1])
+            l_xyz.append(new_xyz)
+            l_features.append(new_features)
+
+        for idx in range(len(self.fp_layers)):
+            src_idx = -(idx + 1)
+            dst_idx = src_idx - 1
+            l_features[dst_idx] = self.fp_layers[idx](
+                l_xyz[dst_idx],
+                l_xyz[src_idx],
+                l_features[dst_idx],
+                l_features[src_idx],
+            )
+
+        x = self.post_mlp(l_features[0].transpose(1, 2)).transpose(1, 2)
+        return x
+
+
+def _square_distance(src: torch.Tensor, dst: torch.Tensor) -> torch.Tensor:
+    return torch.cdist(src, dst)
+
+
+def _index_points(points: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+    bsz = points.shape[0]
+    if idx.ndim == 2:
+        batch_idx = torch.arange(bsz, device=points.device)[:, None]
+    else:
+        batch_idx = torch.arange(bsz, device=points.device)[:, None, None]
+    return points[batch_idx, idx]
+
+
+def _farthest_point_sample(xyz: torch.Tensor, npoint: int) -> torch.Tensor:
+    device = xyz.device
+    bsz, npts, _ = xyz.shape
+    centroids = torch.zeros(bsz, npoint, dtype=torch.long, device=device)
+    distance = torch.full((bsz, npts), float("inf"), device=device)
+    farthest = torch.randint(0, npts, (bsz,), device=device)
+    batch_indices = torch.arange(bsz, device=device)
+    for i in range(npoint):
+        centroids[:, i] = farthest
+        centroid = xyz[batch_indices, farthest, :].view(bsz, 1, 3)
+        dist = torch.sum((xyz - centroid) ** 2, dim=-1)
+        distance = torch.minimum(distance, dist)
+        farthest = distance.max(dim=-1).indices
+    return centroids
+
+
+def _query_ball_point(radius: float, nsample: int, xyz: torch.Tensor, new_xyz: torch.Tensor) -> torch.Tensor:
+    dist = _square_distance(new_xyz, xyz)
+    group_idx = dist.argsort(dim=-1)[:, :, :nsample]
+    if radius > 0:
+        mask = dist.gather(-1, group_idx) > radius
+        if mask.any():
+            first = group_idx[:, :, :1].expand_as(group_idx)
+            group_idx = torch.where(mask, first, group_idx)
+    return group_idx
+
+
+class PointNetSetAbstraction(nn.Module):
+    def __init__(
+        self,
+        npoint: int,
+        radius: float,
+        nsample: int,
+        mlp: list[int],
+        use_xyz: bool = True,
+        in_channels: int = 0,
+    ) -> None:
+        super().__init__()
+        self.npoint = int(npoint)
+        self.radius = float(radius)
+        self.nsample = int(nsample)
+        self.use_xyz = bool(use_xyz)
+
+        last_channel = int(in_channels) + (3 if self.use_xyz else 0)
+        layers: list[nn.Module] = []
+        for out_channel in mlp:
+            layers.append(nn.Conv2d(last_channel, int(out_channel), 1))
+            layers.append(nn.SiLU())
+            last_channel = int(out_channel)
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(
+        self, xyz: torch.Tensor, points: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        bsz, npts, _ = xyz.shape
+        npoint = min(self.npoint, npts)
+        fps_idx = _farthest_point_sample(xyz, npoint)
+        new_xyz = _index_points(xyz, fps_idx)
+
+        group_idx = _query_ball_point(self.radius, self.nsample, xyz, new_xyz)
+        grouped_xyz = _index_points(xyz, group_idx)
+        grouped_xyz = grouped_xyz - new_xyz[:, :, None, :]
+
+        if points is not None:
+            grouped_points = _index_points(points, group_idx)
+            if self.use_xyz:
+                grouped_points = torch.cat([grouped_xyz, grouped_points], dim=-1)
+        else:
+            grouped_points = grouped_xyz
+
+        grouped_points = grouped_points.permute(0, 3, 1, 2).contiguous()
+        new_points = self.mlp(grouped_points).max(dim=-1).values
+        return new_xyz, new_points.transpose(1, 2).contiguous()
+
+
+class PointNetFeaturePropagation(nn.Module):
+    def __init__(self, in_channels: int, mlp: list[int]) -> None:
+        super().__init__()
+        layers: list[nn.Module] = []
+        last_channel = int(in_channels)
+        for out_channel in mlp:
+            layers.append(nn.Conv1d(last_channel, int(out_channel), 1))
+            layers.append(nn.SiLU())
+            last_channel = int(out_channel)
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(
+        self,
+        xyz1: torch.Tensor,
+        xyz2: torch.Tensor,
+        points1: torch.Tensor | None,
+        points2: torch.Tensor,
+    ) -> torch.Tensor:
+        dist = _square_distance(xyz1, xyz2)
+        if xyz2.shape[1] == 1:
+            interpolated = points2.repeat(1, xyz1.shape[1], 1)
+        else:
+            dists, idx = dist.topk(k=3, dim=-1, largest=False)
+            dists = torch.clamp(dists, min=1e-10)
+            weight = (1.0 / dists)
+            weight = weight / weight.sum(dim=-1, keepdim=True)
+            interpolated = (_index_points(points2, idx) * weight[..., None]).sum(dim=2)
+
+        if points1 is not None:
+            new_points = torch.cat([points1, interpolated], dim=-1)
+        else:
+            new_points = interpolated
+
+        return self.mlp(new_points.transpose(1, 2)).transpose(1, 2).contiguous()
 
 
 class EdgeConvBackbone(nn.Module):
@@ -173,7 +402,10 @@ class EdgeConvBackbone(nn.Module):
 
         self.in_proj = nn.Linear(int(input_dim), int(hidden_dim))
         self.blocks = nn.ModuleList(
-            [EdgeConvBlock(int(hidden_dim), block_time_dim, dropout=dropout) for _ in range(int(depth))]
+            [
+                EdgeConvBlock(int(hidden_dim), block_time_dim, dropout=dropout)
+                for _ in range(int(depth))
+            ]
         )
         self.global_proj = nn.Sequential(
             nn.LayerNorm(int(hidden_dim)),
@@ -183,10 +415,14 @@ class EdgeConvBackbone(nn.Module):
         )
         self.output_dim = int(hidden_dim)
 
-    def forward(self, inputs: torch.Tensor, xyz: torch.Tensor, *, t: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, inputs: torch.Tensor, xyz: torch.Tensor, *, t: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if self.uses_time:
             if t is None:
-                raise ValueError("EdgeConvBackbone requires diffusion timesteps when time conditioning is enabled.")
+                raise ValueError(
+                    "EdgeConvBackbone requires diffusion timesteps when time conditioning is enabled."
+                )
             t_emb = self.time_embed(t)
         else:
             t_emb = None
@@ -217,6 +453,12 @@ def build_point_backbone(
             dropout=dropout,
             time_dim=time_dim,
         )
+    if key == "pointnetplusplus":
+        return PointNetPlusPlusBackbone(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+        )
     if key == "edgeconv":
         return EdgeConvBackbone(
             input_dim=input_dim,
@@ -226,4 +468,6 @@ def build_point_backbone(
             knn_k=knn_k,
             time_dim=time_dim,
         )
-    raise ValueError(f"Unsupported backbone '{backbone}'. Choose from: pointnet, edgeconv.")
+    raise ValueError(
+        f"Unsupported backbone '{backbone}'. Choose from: pointnet, pointnetplusplus, edgeconv."
+    )

@@ -64,6 +64,7 @@ Train:
 ```bash
 python -m src.main train --model point_svm
 python -m src.main train --model point_supervised --backbone edgeconv
+python -m src.main train --model point_supervised --backbone pointnetplusplus
 python -m src.main train --model range_unet
 python -m src.main train --model range_diffusion --diffusion-steps 200 --validation-prediction-mode cheap
 python -m src.main train --model point_diffusion --backbone edgeconv --diffusion-steps 200 --validation-prediction-mode full
@@ -76,6 +77,7 @@ Evaluate:
 python -m src.main evaluate --model range_unet --checkpoint output/range_unet/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
 python -m src.main evaluate --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
+python -m src.main evaluate --model point_supervised --backbone pointnetplusplus --checkpoint output/point_supervised/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt --splits train,val,test
 python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --splits val --max-batches 4 --sampling-steps 5
 ```
@@ -86,6 +88,7 @@ Render:
 python -m src.main render --model range_diffusion --checkpoint output/range_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
 python -m src.main render --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt
 python -m src.main render --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
+python -m src.main render --model point_supervised --backbone pointnetplusplus --checkpoint output/point_supervised/.../checkpoints/last.ckpt
 ```
 
 Common options:
