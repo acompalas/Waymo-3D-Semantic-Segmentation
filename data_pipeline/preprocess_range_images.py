@@ -63,10 +63,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", type=Path, default=Path("preprocessed/range_images"))
     p.add_argument("--laser-id", type=int, default=1)
     p.add_argument(
+        "--labeled-subdirs",
+        nargs="*",
+        default=["training", "validation"],
+        help=(
+            "Source subdirs to treat as labeled. These must contain lidar, lidar_segmentation, "
+            "and lidar_calibration."
+        ),
+    )
+    p.add_argument(
         "--unlabeled-subdirs",
         nargs="*",
         default=[],
-        help="Source subdirs to treat as unlabeled (segments are preprocessed from lidar+calibration; seg1/seg2 are omitted).",
+        help=(
+            "Source subdirs to treat as unlabeled. These are preprocessed from lidar+calibration "
+            "only, and seg1/seg2 are omitted."
+        ),
     )
     p.add_argument(
         "--num-workers",
@@ -111,15 +123,49 @@ def _map_segment_files(directory: Path) -> dict[str, Path]:
     return {p.stem: p for p in sorted(directory.glob("*.parquet"))}
 
 
-def _discover_source_roots(data_dir: Path) -> dict[str, Path]:
-    roots: dict[str, Path] = {}
-    for p in sorted(data_dir.iterdir()):
-        if not p.is_dir():
+def _normalize_subdir_list(values: Sequence[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        subdir = str(value).strip()
+        if not subdir or subdir in seen:
             continue
-        if (p / "lidar").is_dir() and (p / "lidar_segmentation").is_dir() and (p / "lidar_calibration").is_dir():
-            roots[p.name] = p
-    if not roots:
-        raise FileNotFoundError(f"No source subdirs with lidar/lidar_segmentation/lidar_calibration found under {data_dir}")
+        seen.add(subdir)
+        out.append(subdir)
+    return out
+
+
+def _resolve_source_roots(
+    data_dir: Path,
+    labeled_subdirs: Sequence[str],
+    unlabeled_subdirs: Sequence[str],
+) -> dict[str, Path]:
+    labeled = _normalize_subdir_list(labeled_subdirs)
+    unlabeled = _normalize_subdir_list(unlabeled_subdirs)
+
+    overlap = sorted(set(labeled).intersection(unlabeled))
+    if overlap:
+        raise ValueError(f"Source subdirs cannot be both labeled and unlabeled: {overlap}")
+
+    requested = labeled + unlabeled
+    if not requested:
+        raise ValueError("No source subdirs requested. Pass --labeled-subdirs and/or --unlabeled-subdirs.")
+
+    roots: dict[str, Path] = {}
+    for subdir in requested:
+        root = data_dir / subdir
+        if not root.is_dir():
+            raise FileNotFoundError(f"Missing source subdir: {root}")
+
+        required = ["lidar", "lidar_calibration"]
+        if subdir in labeled:
+            required.append("lidar_segmentation")
+
+        missing = [name for name in required if not (root / name).is_dir()]
+        if missing:
+            raise FileNotFoundError(f"Source subdir '{subdir}' is missing required directories: {missing}")
+        roots[subdir] = root
+
     return roots
 
 
@@ -487,24 +533,22 @@ def main() -> None:
     data_dir = args.data_dir
     output_dir = args.output_dir
     laser_id = int(args.laser_id)
-
-    source_roots = _discover_source_roots(data_dir)
+    labeled_subdirs = _normalize_subdir_list(args.labeled_subdirs)
+    unlabeled_subdirs = _normalize_subdir_list(args.unlabeled_subdirs)
+    source_roots = _resolve_source_roots(
+        data_dir=data_dir,
+        labeled_subdirs=labeled_subdirs,
+        unlabeled_subdirs=unlabeled_subdirs,
+    )
     proto_path = data_dir / "segmentation.proto"
-
-    unlabeled_subdirs = {str(s) for s in args.unlabeled_subdirs}
-    unknown_unlabeled = sorted(unlabeled_subdirs.difference(source_roots.keys()))
-    if unknown_unlabeled:
-        raise ValueError(
-            f"--unlabeled-subdirs contains unknown source subdirs: {unknown_unlabeled}. "
-            f"Available: {sorted(source_roots.keys())}"
-        )
+    unlabeled_subdir_set = set(unlabeled_subdirs)
 
     classes = parse_classes(proto_path)
     segment_source_records: list[dict[str, Any]] = []
     labeled_source_segments: dict[str, list[str]] = {}
     unlabeled_source_segments: dict[str, list[str]] = {}
     for source_subdir, root in source_roots.items():
-        is_labeled = source_subdir not in unlabeled_subdirs
+        is_labeled = source_subdir not in unlabeled_subdir_set
         if is_labeled:
             labeled_index = _build_labeled_frame_index(root, laser_id)
             segments = sorted(str(x) for x in labeled_index.get_column(SEGMENT_COL).unique().to_list())
