@@ -87,7 +87,6 @@ class DataAndModelTests(unittest.TestCase):
         point_supervised = PointCloudTaskModel(
             num_classes=23,
             backbone="handcrafted",
-            head="mlp",
             behavior="supervised",
         )
         point_prediction = point_supervised.predict_segmented_pointcloud(point_frame=point_frame)
@@ -99,7 +98,6 @@ class DataAndModelTests(unittest.TestCase):
             depth=2,
             diffusion_steps=4,
             backbone="edgeconv",
-            head="mlp",
             behavior="diffusion",
         )
         point_prediction = point_diffusion.predict_segmented_pointcloud(point_frame=point_frame)
@@ -110,7 +108,6 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             depth=2,
             backbone="unet",
-            head="segmentation",
             behavior="supervised",
         )
         range_prediction = range_supervised.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
@@ -121,7 +118,6 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             diffusion_steps=4,
             backbone="crossattn_unet",
-            head="denoising",
             behavior="diffusion",
         )
         range_prediction = range_diffusion.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
@@ -139,7 +135,6 @@ class DataAndModelTests(unittest.TestCase):
             depth=2,
             diffusion_steps=4,
             backbone="pointnet",
-            head="mlp",
             behavior="diffusion",
         )
         with patch.object(point_diffusion.behavior_impl.ddpm, "sample", wraps=point_diffusion.behavior_impl.ddpm.sample) as sample_mock:
@@ -152,7 +147,6 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             diffusion_steps=4,
             backbone="crossattn_unet",
-            head="denoising",
             behavior="diffusion",
         )
         prediction = range_diffusion.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
@@ -169,28 +163,28 @@ class DataAndModelTests(unittest.TestCase):
 
         models_and_batches = [
             (
-                PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised"),
+                PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised"),
                 point_batch,
             ),
             (
-                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, backbone="edgeconv", head="mlp", behavior="supervised"),
+                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, backbone="edgeconv", behavior="supervised"),
                 point_batch,
             ),
             (
-                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, diffusion_steps=4, backbone="pointnet", head="mlp", behavior="diffusion"),
+                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, diffusion_steps=4, backbone="pointnet", behavior="diffusion"),
                 point_batch,
             ),
             (
-                RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", head="segmentation", behavior="supervised"),
+                RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", behavior="supervised"),
                 range_batch,
             ),
             (
-                RangeImageTaskModel(num_classes=23, base_channels=4, diffusion_steps=4, backbone="crossattn_unet", head="denoising", behavior="diffusion"),
+                RangeImageTaskModel(num_classes=23, base_channels=4, diffusion_steps=4, backbone="crossattn_unet", behavior="diffusion"),
                 range_batch,
             ),
         ]
         for model, batch in models_and_batches:
-            output = model.compute_stage_output(batch, stage="train", evaluation=False)
+            output = model.compute_stage_output(batch, evaluation=False)
             self.assertIn("loss", output)
             self.assertIn("batch_size", output)
             if model.hparams.behavior == "diffusion":
@@ -211,11 +205,10 @@ class DataAndModelTests(unittest.TestCase):
             depth=2,
             diffusion_steps=4,
             backbone="pointnet",
-            head="mlp",
             behavior="diffusion",
         )
         with patch.object(model.behavior_impl.ddpm, "sample", wraps=model.behavior_impl.ddpm.sample) as sample_mock:
-            model.compute_stage_output(batch, stage="val", evaluation=True)
+            model.compute_stage_output(batch, evaluation=True)
             self.assertIsNone(sample_mock.call_args.kwargs.get("steps"))
 
     def test_diffusion_validation_outputs_predictions_but_training_does_not(self) -> None:
@@ -230,25 +223,46 @@ class DataAndModelTests(unittest.TestCase):
             depth=2,
             diffusion_steps=4,
             backbone="pointnet",
-            head="mlp",
             behavior="diffusion",
         )
-        train_output = model.compute_stage_output(train_batch, stage="train", evaluation=False)
+        train_output = model.compute_stage_output(train_batch, evaluation=False)
         self.assertEqual(sorted(train_output), ["batch_size", "loss"])
 
-        val_output = model.compute_stage_output(val_batch, stage="val", evaluation=True)
+        val_output = model.compute_stage_output(val_batch, evaluation=True)
         self.assertEqual(sorted(val_output), ["batch_size", "labels", "loss", "metric_mask", "preds"])
         self.assertEqual(val_output["preds"].shape, val_output["labels"].shape)
+
+    def test_all_task_models_share_default_optimizer_policy(self) -> None:
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
+        range_model = RangeImageTaskModel(num_classes=23, backbone="unet", behavior="supervised")
+        trainer_stub = type("TrainerStub", (), {"max_epochs": 5})()
+
+        point_model._trainer = trainer_stub
+        range_model._trainer = trainer_stub
+
+        point_config = point_model.configure_optimizers()
+        range_config = range_model.configure_optimizers()
+
+        self.assertEqual(point_config["optimizer"].__class__.__name__, "AdamW")
+        self.assertEqual(range_config["optimizer"].__class__.__name__, "AdamW")
+        self.assertEqual(
+            point_config["lr_scheduler"]["scheduler"].__class__.__name__,
+            "CosineAnnealingLR",
+        )
+        self.assertEqual(
+            range_config["lr_scheduler"]["scheduler"].__class__.__name__,
+            "CosineAnnealingLR",
+        )
 
     def test_point_backbones_accept_xyz_and_validate_timestep_support(self) -> None:
         xyz = torch.randn(1, 8, 3)
         inputs = torch.randn(1, 8, 5)
-        pointnet = PointCloudTaskModel(num_classes=23, backbone="pointnet", head="mlp", behavior="supervised")
+        pointnet = PointCloudTaskModel(num_classes=23, backbone="pointnet", behavior="supervised")
         self.assertEqual(pointnet.backbone(inputs, xyz=xyz).shape[:2], (1, 8))
         with self.assertRaises(ValueError):
             pointnet.backbone(inputs, xyz=xyz, t=torch.ones(1, dtype=torch.long))
 
-        pointnetpp = PointCloudTaskModel(num_classes=23, backbone="pointnetplusplus", head="mlp", behavior="supervised")
+        pointnetpp = PointCloudTaskModel(num_classes=23, backbone="pointnetplusplus", behavior="supervised")
         self.assertEqual(pointnetpp.backbone(inputs, xyz=xyz).shape[:2], (1, 8))
         with self.assertRaises(ValueError):
             pointnetpp.backbone(inputs, xyz=xyz, t=torch.ones(1, dtype=torch.long))
@@ -259,7 +273,6 @@ class DataAndModelTests(unittest.TestCase):
             depth=2,
             diffusion_steps=4,
             backbone="edgeconv",
-            head="mlp",
             behavior="diffusion",
         )
         diffusion_inputs = torch.randn(1, 8, 28)
@@ -267,7 +280,7 @@ class DataAndModelTests(unittest.TestCase):
             diffusion_model.backbone(diffusion_inputs, xyz=xyz)
 
     def test_handcrafted_backbone_uses_shared_head(self) -> None:
-        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", head="mlp", behavior="supervised")
+        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
         self.assertEqual(model.head.net[-1].out_features, 23)
         self.assertEqual(model.backbone.output_dim, model.head.net[1].in_features)
         self.assertIsInstance(model.backbone.post_mlp, torch.nn.Identity)
@@ -275,7 +288,6 @@ class DataAndModelTests(unittest.TestCase):
         projected = PointCloudTaskModel(
             num_classes=23,
             backbone="handcrafted",
-            head="mlp",
             behavior="supervised",
             proj_dim=64,
             proj_depth=2,
@@ -291,7 +303,6 @@ class DataAndModelTests(unittest.TestCase):
             hidden_dim=32,
             depth=2,
             backbone="edgeconv",
-            head="mlp",
             behavior="supervised",
             geometry_only=False,
         )
@@ -302,7 +313,6 @@ class DataAndModelTests(unittest.TestCase):
             hidden_dim=32,
             depth=2,
             backbone="edgeconv",
-            head="mlp",
             behavior="supervised",
             geometry_only=True,
         )
@@ -314,7 +324,6 @@ class DataAndModelTests(unittest.TestCase):
             depth=2,
             diffusion_steps=4,
             backbone="edgeconv",
-            head="mlp",
             behavior="diffusion",
             geometry_only=False,
         )
@@ -326,7 +335,6 @@ class DataAndModelTests(unittest.TestCase):
             depth=2,
             diffusion_steps=4,
             backbone="edgeconv",
-            head="mlp",
             behavior="diffusion",
             geometry_only=True,
         )
@@ -337,7 +345,6 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             depth=2,
             backbone="unet",
-            head="segmentation",
             behavior="supervised",
             geometry_only=False,
         )
@@ -348,7 +355,6 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             depth=2,
             backbone="unet",
-            head="segmentation",
             behavior="supervised",
             geometry_only=True,
         )
@@ -359,7 +365,6 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             diffusion_steps=4,
             backbone="crossattn_unet",
-            head="denoising",
             behavior="diffusion",
             geometry_only=True,
         )

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from src.main import _default_wandb_run_name, _generate_wandb_run_id, _wandb_name_timestamp, parse_args
-from src.runtime import backbone_choices, get_model_selection, head_choices, representation_choices
+from src.runtime import backbone_choices, get_model_selection, representation_choices
 
 
 class RegistryCliTests(unittest.TestCase):
@@ -19,8 +19,6 @@ class RegistryCliTests(unittest.TestCase):
                 "supervised",
                 "--backbone",
                 "handcrafted",
-                "--head",
-                "mlp",
                 "--proj-dim",
                 "64",
                 "--proj-depth",
@@ -35,7 +33,6 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(args.representation, "point_clouds")
         self.assertEqual(args.behavior, "supervised")
         self.assertEqual(args.backbone, "handcrafted")
-        self.assertEqual(args.head, "mlp")
         self.assertEqual(args.proj_dim, 64)
         self.assertEqual(args.proj_depth, 2)
         self.assertEqual(args.val_samples_per_segment, 3)
@@ -52,8 +49,6 @@ class RegistryCliTests(unittest.TestCase):
                 "diffusion",
                 "--backbone",
                 "pointnet",
-                "--head",
-                "mlp",
                 "--diffusion-steps",
                 "8",
                 "--no-auto-evaluate",
@@ -71,8 +66,6 @@ class RegistryCliTests(unittest.TestCase):
                 "supervised",
                 "--backbone",
                 "unet",
-                "--head",
-                "segmentation",
                 "--checkpoint",
                 "fake.ckpt",
             ]
@@ -82,15 +75,30 @@ class RegistryCliTests(unittest.TestCase):
 
     def test_registry_filters_choices_by_behavior(self) -> None:
         self.assertEqual(backbone_choices("point_clouds", "diffusion"), ["edgeconv", "pointnet"])
-        self.assertEqual(head_choices("range_images", "diffusion"), ["denoising"])
 
     def test_selection_builds_composite_model_id(self) -> None:
-        selection = get_model_selection("point_clouds", "edgeconv", "mlp", "supervised")
-        self.assertEqual(selection.model_id, "point_clouds__edgeconv__mlp__supervised")
+        selection = get_model_selection("point_clouds", "edgeconv", "supervised")
+        self.assertEqual(selection.model_id, "point_clouds__edgeconv__supervised")
 
     def test_default_wandb_run_name_uses_representation_backbone_and_timestamp(self) -> None:
-        selection = get_model_selection("point_clouds", "edgeconv", "mlp", "supervised")
+        selection = get_model_selection("point_clouds", "edgeconv", "supervised")
         self.assertEqual(_default_wandb_run_name(selection, "20260316-154500"), "point_clouds-edgeconv-20260316-154500")
+
+    def test_old_head_cli_arg_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            parse_args(
+                [
+                    "train",
+                    "--representation",
+                    "point_clouds",
+                    "--behavior",
+                    "supervised",
+                    "--backbone",
+                    "handcrafted",
+                    "--head",
+                    "mlp",
+                ]
+            )
 
     def test_generate_wandb_run_id_returns_short_hex(self) -> None:
         with patch("src.main.uuid.uuid4") as uuid4_mock:

@@ -17,14 +17,12 @@ class PointMLPHead(nn.Module):
 
 
 class RangeConvHead(nn.Module):
-    def __init__(self, input_channels: int, output_channels: int, kernel_size: int = 1) -> None:
+    def __init__(self, input_channels: int, output_channels: int) -> None:
         super().__init__()
-        padding = int(kernel_size) // 2
         self.conv = nn.Conv2d(
             int(input_channels),
             int(output_channels),
-            kernel_size=int(kernel_size),
-            padding=padding,
+            kernel_size=1,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

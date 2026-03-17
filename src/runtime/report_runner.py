@@ -87,7 +87,6 @@ def evaluate_split(
                 break
             stage_output = model.compute_stage_output(
                 move_batch_to_device(batch, device),
-                stage=split,
                 evaluation=True,
             )
             accumulator.consume(stage_output)

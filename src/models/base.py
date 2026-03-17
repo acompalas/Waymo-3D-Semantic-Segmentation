@@ -126,7 +126,6 @@ class SegmentationLightningModule(L.LightningModule):
     def _shared_stage_step(self, batch: dict[str, Any], stage: str) -> torch.Tensor:
         output = self.compute_stage_output(
             batch,
-            stage=stage,
             evaluation=(stage != "train"),
         )
         return self._consume_and_log_stage_output(stage, output)
@@ -135,12 +134,10 @@ class SegmentationLightningModule(L.LightningModule):
         self,
         batch: dict[str, Any],
         *,
-        stage: str,
         evaluation: bool,
     ) -> dict[str, Any]:
         output = self._compute_stage_output(
             batch,
-            stage=stage,
             evaluation=evaluation,
         )
         return validate_stage_output(output)
@@ -149,10 +146,18 @@ class SegmentationLightningModule(L.LightningModule):
         self,
         batch: dict[str, Any],
         *,
-        stage: str,
         evaluation: bool,
     ) -> dict[str, Any]:
         raise NotImplementedError
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=float(self.hparams.learning_rate),
+            weight_decay=float(self.hparams.weight_decay),
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, int(self.trainer.max_epochs)))
+        return {"optimizer": optimizer, "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"}}
 
     def on_train_epoch_start(self) -> None:
         self.reset_stage_metrics("train")
@@ -185,9 +190,7 @@ class SegmentationLightningModule(L.LightningModule):
 
         if not self._use_balanced_class_weights:
             rank_zero_info("Balanced class weights: disabled")
-            return
-
-        if weights is not None:
+        elif weights is not None:
             self.set_class_weights(weights.to(self.device))
             rank_zero_info(f"Class weights: {_format_class_summary(weights, float_values=True)}")
         else:

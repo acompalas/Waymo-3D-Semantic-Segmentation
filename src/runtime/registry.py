@@ -1,9 +1,10 @@
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Protocol
+from typing import Callable, Protocol
 
 import lightning as L
+
 from ..models.backbones.point.registry import POINT_BACKBONE_SPECS
 from ..models.backbones.range.registry import RANGE_BACKBONE_SPECS
 
@@ -16,12 +17,7 @@ def _parse_scales(raw: str) -> tuple[int, ...]:
     return values
 
 
-def _noop_train_args(_parser: argparse.ArgumentParser) -> None:
-    return None
-
-
 class BackboneSpecLike(Protocol):
-    backbone_id: str
     supported_behaviors: tuple[str, ...]
     add_args: Callable[[argparse.ArgumentParser], None]
 
@@ -40,24 +36,15 @@ class RepresentationSpec:
 
 
 @dataclass(frozen=True)
-class ComponentSpec:
-    component_id: str
-    representation: str
-    supported_behaviors: tuple[str, ...]
-    add_train_args: Callable[[argparse.ArgumentParser], None] = _noop_train_args
-
-
-@dataclass(frozen=True)
 class ModelSelection:
     representation: str
     backbone: str
-    head: str
     behavior: str
     spec: RepresentationSpec
 
     @property
     def model_id(self) -> str:
-        return "__".join([self.representation, self.backbone, self.head, self.behavior])
+        return "__".join([self.representation, self.backbone, self.behavior])
 
     def load_from_checkpoint(self, checkpoint_path: str | Path) -> L.LightningModule:
         return self.spec.load_from_checkpoint(checkpoint_path)
@@ -69,7 +56,6 @@ class ModelSelection:
             learning_rate=args.lr,
             weight_decay=getattr(args, "weight_decay", 1e-4),
             backbone=self.backbone,
-            head=self.head,
             behavior=self.behavior,
             diffusion_steps=getattr(args, "diffusion_steps", 1000),
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
@@ -96,6 +82,7 @@ class ModelSelection:
             dropout=getattr(args, "dropout", 0.0),
         )
 
+
 def add_diffusion_behavior_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--diffusion-steps", type=int, default=1000)
 
@@ -111,6 +98,11 @@ REPRESENTATION_REGISTRY: dict[str, RepresentationSpec] = {
     ),
 }
 
+BACKBONE_REGISTRY: dict[str, dict[str, BackboneSpecLike]] = {
+    "point_clouds": POINT_BACKBONE_SPECS,
+    "range_images": RANGE_BACKBONE_SPECS,
+}
+
 
 def _representation_module_cls(representation: str) -> type[L.LightningModule]:
     if representation == "point_clouds":
@@ -124,55 +116,11 @@ def _representation_module_cls(representation: str) -> type[L.LightningModule]:
     raise KeyError(f"Unknown representation '{representation}'.")
 
 
-def _backbone_component_specs(
-    representation: str,
-    specs: Mapping[str, BackboneSpecLike],
-) -> dict[str, ComponentSpec]:
-    return {
-        spec.backbone_id: ComponentSpec(
-            component_id=spec.backbone_id,
-            representation=representation,
-            supported_behaviors=spec.supported_behaviors,
-            add_train_args=spec.add_args,
-        )
-        for spec in specs.values()
-    }
-
-BACKBONE_REGISTRY: dict[str, ComponentSpec] = {
-    **_backbone_component_specs("point_clouds", POINT_BACKBONE_SPECS),
-    **_backbone_component_specs("range_images", RANGE_BACKBONE_SPECS),
-}
-
-HEAD_REGISTRY: dict[str, ComponentSpec] = {
-    "mlp": ComponentSpec("mlp", "point_clouds", ("supervised", "diffusion")),
-    "segmentation": ComponentSpec("segmentation", "range_images", ("supervised",)),
-    "denoising": ComponentSpec("denoising", "range_images", ("diffusion",)),
-}
-
-BEHAVIOR_REGISTRY: dict[str, ComponentSpec] = {
-    "supervised": ComponentSpec("supervised", "point_clouds", ("supervised",)),
-    "diffusion": ComponentSpec("diffusion", "point_clouds", ("diffusion",), add_diffusion_behavior_args),
-}
-
-
-def _union_component_ids(registry: dict[str, ComponentSpec]) -> list[str]:
-    return sorted(registry)
-
-
-def _filtered_component_ids(
-    registry: dict[str, ComponentSpec],
-    *,
-    representation: str | None,
-    behavior: str | None = None,
-) -> list[str]:
-    values: list[str] = []
-    for component_id, spec in registry.items():
-        if representation is not None and spec.representation != representation:
-            continue
-        if behavior is not None and behavior not in spec.supported_behaviors:
-            continue
-        values.append(component_id)
-    return sorted(values)
+def _backbone_spec(representation: str, backbone: str) -> BackboneSpecLike:
+    try:
+        return BACKBONE_REGISTRY[str(representation)][str(backbone)]
+    except KeyError as exc:
+        raise KeyError(f"Unknown backbone '{backbone}' for representation '{representation}'.") from exc
 
 
 def representation_choices() -> list[str]:
@@ -184,39 +132,30 @@ def behavior_choices(_representation: str | None = None) -> list[str]:
 
 
 def backbone_choices(representation: str | None = None, behavior: str | None = None) -> list[str]:
-    values = _filtered_component_ids(BACKBONE_REGISTRY, representation=representation, behavior=behavior)
-    return values or _union_component_ids(BACKBONE_REGISTRY)
+    values: list[str] = []
+    representations = [representation] if representation is not None else list(BACKBONE_REGISTRY)
+    for rep in representations:
+        for name, spec in BACKBONE_REGISTRY[str(rep)].items():
+            if behavior is not None and behavior not in spec.supported_behaviors:
+                continue
+            values.append(name)
+    return sorted(set(values))
 
 
-def head_choices(representation: str | None = None, behavior: str | None = None) -> list[str]:
-    values = _filtered_component_ids(HEAD_REGISTRY, representation=representation, behavior=behavior)
-    return values or _union_component_ids(HEAD_REGISTRY)
-
-
-def get_model_selection(representation: str, backbone: str, head: str, behavior: str) -> ModelSelection:
+def get_model_selection(representation: str, backbone: str, behavior: str) -> ModelSelection:
     try:
         spec = REPRESENTATION_REGISTRY[str(representation)]
     except KeyError as exc:
         raise KeyError(f"Unknown representation '{representation}'. Choices: {sorted(REPRESENTATION_REGISTRY)}") from exc
 
-    try:
-        backbone_spec = BACKBONE_REGISTRY[str(backbone)]
-        head_spec = HEAD_REGISTRY[str(head)]
-    except KeyError as exc:
-        raise KeyError("Unknown backbone or head selection.") from exc
-
-    if backbone_spec.representation != spec.representation:
-        raise ValueError(f"Backbone '{backbone}' is not valid for representation '{representation}'.")
-    if head_spec.representation != spec.representation:
-        raise ValueError(f"Head '{head}' is not valid for representation '{representation}'.")
+    backbone_spec = _backbone_spec(spec.representation, backbone)
+    if behavior not in behavior_choices(spec.representation):
+        raise ValueError(f"Unsupported behavior '{behavior}'.")
     if behavior not in backbone_spec.supported_behaviors:
         raise ValueError(f"Backbone '{backbone}' does not support behavior '{behavior}'.")
-    if behavior not in head_spec.supported_behaviors:
-        raise ValueError(f"Head '{head}' does not support behavior '{behavior}'.")
     return ModelSelection(
         representation=spec.representation,
         backbone=str(backbone),
-        head=str(head),
         behavior=str(behavior),
         spec=spec,
     )
@@ -227,12 +166,11 @@ def maybe_add_component_train_args(
     *,
     representation: str | None,
     backbone: str | None,
-    head: str | None,
     behavior: str | None,
 ) -> None:
-    if representation is None or backbone is None or head is None or behavior is None:
+    if representation is None or backbone is None or behavior is None:
         return
-    selection = get_model_selection(representation, backbone, head, behavior)
-    BACKBONE_REGISTRY[selection.backbone].add_train_args(parser)
+    selection = get_model_selection(representation, backbone, behavior)
+    _backbone_spec(selection.representation, selection.backbone).add_args(parser)
     if selection.behavior == "diffusion":
         add_diffusion_behavior_args(parser)

@@ -2,7 +2,7 @@ from .edgeconv import EdgeConvBackbone
 from .handcrafted import HandcraftedPointBackbone
 from .pointnet import PointNetBackbone
 from .pointnetplusplus import PointNetPlusPlusBackbone
-from .registry import POINT_BACKBONE_SPECS, PointBackboneSpec, build_point_backbone, noop_backbone_args
+from .registry import POINT_BACKBONE_SPECS, PointBackboneSpec, build_point_backbone
 
 __all__ = [
     "EdgeConvBackbone",
@@ -12,5 +12,4 @@ __all__ = [
     "PointNetBackbone",
     "PointNetPlusPlusBackbone",
     "build_point_backbone",
-    "noop_backbone_args",
 ]

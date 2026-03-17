@@ -1,27 +1,14 @@
 import torch
+import torch.nn.functional as F
 
 from .base import PointCloudSegmentationModel, RangeImageSegmentationModel
 from .backbones.point.registry import build_point_backbone
 from .backbones.range.registry import build_range_backbone
-from .behaviors import build_point_behavior, build_range_behavior
+from .behaviors import DiffusionBehavior, build_behavior
+from .diffusion import labels_to_soft_points, labels_to_soft_range
 from .heads import PointMLPHead, RangeConvHead
 from .inputs import point_geometry, point_input_dim, range_input_channels, select_point_model_inputs, select_range_model_inputs
 
-
-def _build_point_head(head: str, *, input_dim: int, output_dim: int) -> PointMLPHead:
-    key = str(head).lower()
-    if key == "mlp":
-        return PointMLPHead(input_dim=input_dim, output_dim=output_dim)
-    raise ValueError(f"Unsupported point head '{head}'.")
-
-
-def _build_range_head(head: str, *, input_channels: int, output_channels: int) -> RangeConvHead:
-    key = str(head).lower()
-    if key == "segmentation":
-        return RangeConvHead(input_channels=input_channels, output_channels=output_channels, kernel_size=1)
-    if key == "denoising":
-        return RangeConvHead(input_channels=input_channels, output_channels=output_channels, kernel_size=3)
-    raise ValueError(f"Unsupported range head '{head}'.")
 
 class PointCloudTaskModel(PointCloudSegmentationModel):
     def __init__(
@@ -30,7 +17,6 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
         backbone: str = "edgeconv",
-        head: str = "mlp",
         behavior: str = "supervised",
         hidden_dim: int = 256,
         depth: int = 6,
@@ -51,7 +37,7 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
             use_balanced_class_weights=use_balanced_class_weights,
         )
         self.save_hyperparameters()
-        self.behavior_impl = build_point_behavior(behavior, diffusion_steps=int(diffusion_steps))
+        self.behavior_impl = build_behavior(behavior, diffusion_steps=int(diffusion_steps))
         model_input_dim = point_input_dim(geometry_only=bool(geometry_only))
         backbone_input_dim = self.behavior_impl.point_backbone_input_dim(
             point_input_dim=model_input_dim,
@@ -72,7 +58,7 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
             proj_depth=int(proj_depth),
             proj_dropout=float(proj_dropout),
         )
-        self.head = _build_point_head(str(head), input_dim=int(self.backbone.output_dim), output_dim=int(num_classes))
+        self.head = PointMLPHead(input_dim=int(self.backbone.output_dim), output_dim=int(num_classes))
 
     def prepare_runtime(self) -> None:
         self.behavior_impl.prepare_runtime(self)
@@ -99,29 +85,92 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         point_features: torch.Tensor,
         valid_geometry: torch.Tensor,
     ) -> torch.Tensor:
-        return self.behavior_impl.predict_point_labels(
-            self,
-            points,
-            point_features,
-            valid_geometry,
-        )
+        if isinstance(self.behavior_impl, DiffusionBehavior):
+            model_inputs = self.point_model_inputs(points, point_features)
+            x0 = self.behavior_impl.ddpm.sample(
+                self.predict_diffusion_target,
+                model_inputs,
+                sample_shape=(points.shape[0], points.shape[1], int(self.hparams.num_classes)),
+            )
+            preds = x0.argmax(dim=-1)
+        else:
+            preds = self.predict_logits(points, point_features).argmax(dim=-1)
+        return torch.where(valid_geometry, preds, torch.zeros_like(preds))
+
+    def _point_batch_tensors(
+        self,
+        batch: dict,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        points = batch["points"].float()
+        point_features = batch["point_features"].float()
+        labels = batch["labels"].long()
+        valid_label = batch["valid_label"].bool()
+        valid_geometry = self._resolve_point_valid_geometry(batch, labels)
+        batch_size = int(points.shape[0])
+        return points, point_features, labels, valid_label, valid_geometry, batch_size
+
+    def compute_supervised_stage_output(self, batch: dict) -> dict:
+        points, point_features, labels, valid_label, valid_geometry, batch_size = self._point_batch_tensors(batch)
+        logits = self.predict_logits(points, point_features)
+        preds = logits.argmax(dim=-1)
+        if not bool(valid_label.any()):
+            loss = logits.sum() * 0.0
+            return {
+                "loss": loss,
+                "preds": torch.zeros_like(labels),
+                "labels": labels,
+                "metric_mask": valid_label,
+                "batch_size": batch_size,
+            }
+
+        target = labels.clone()
+        target[~valid_label] = -100
+        loss = F.cross_entropy(logits.transpose(1, 2), target, weight=self.class_weights, ignore_index=-100)
+        return {
+            "loss": loss,
+            "preds": torch.where(valid_geometry, preds, torch.zeros_like(preds)),
+            "labels": labels,
+            "metric_mask": valid_label,
+            "batch_size": batch_size,
+        }
+
+    def compute_diffusion_training_stage_output(self, batch: dict, ddpm) -> dict:
+        points, point_features, labels, valid_label, _valid_geometry, batch_size = self._point_batch_tensors(batch)
+        model_inputs = self.point_model_inputs(points, point_features)
+        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_label)
+        t = torch.randint(1, ddpm.T + 1, (model_inputs.shape[0],), device=self.device, dtype=torch.long)
+        x_t, eps = ddpm.q_sample(x0, t)
+        eps_pred = self.predict_diffusion_target(x_t, t, model_inputs)
+        loss = ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=self.class_weights, class_dim=2)
+        return {
+            "loss": loss,
+            "batch_size": batch_size,
+        }
+
+    def compute_diffusion_evaluation_stage_output(self, batch: dict, ddpm) -> dict:
+        points, point_features, labels, valid_label, valid_geometry, batch_size = self._point_batch_tensors(batch)
+        model_inputs = self.point_model_inputs(points, point_features)
+        x0 = labels_to_soft_points(labels, int(self.hparams.num_classes), valid_label)
+        t = torch.ones(model_inputs.shape[0], device=self.device, dtype=torch.long)
+        x_t, eps = ddpm.q_sample(x0, t)
+        eps_pred = self.predict_diffusion_target(x_t, t, model_inputs)
+        loss = ddpm.loss(eps_pred, eps, valid_label, labels=labels, class_weights=None, class_dim=2)
+        preds = self.predict_point_labels(points, point_features, valid_geometry)
+        return {
+            "loss": loss,
+            "preds": preds,
+            "labels": labels,
+            "metric_mask": valid_label,
+            "batch_size": batch_size,
+        }
 
     def _compute_stage_output(
         self,
         batch: dict,
         *,
-        stage: str,
         evaluation: bool,
     ) -> dict:
-        return self.behavior_impl.compute_point_stage_output(
-            self,
-            batch,
-            stage=stage,
-            evaluation=evaluation,
-        )
-
-    def configure_optimizers(self):
-        return self.behavior_impl.configure_optimizers(self)
+        return self.behavior_impl.compute_stage_output(self, batch, evaluation=evaluation)
 
 
 class RangeImageTaskModel(RangeImageSegmentationModel):
@@ -131,7 +180,6 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
         backbone: str = "unet",
-        head: str = "segmentation",
         behavior: str = "supervised",
         base_channels: int = 32,
         depth: int = 4,
@@ -146,7 +194,7 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         )
         input_channels = range_input_channels(geometry_only=bool(geometry_only))
         self.save_hyperparameters()
-        self.behavior_impl = build_range_behavior(behavior, diffusion_steps=int(diffusion_steps))
+        self.behavior_impl = build_behavior(behavior, diffusion_steps=int(diffusion_steps))
         self.backbone = build_range_backbone(
             str(backbone),
             input_channels=int(input_channels),
@@ -155,7 +203,10 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
             depth=int(depth),
             dropout=float(dropout),
         )
-        self.head = _build_range_head(str(head), input_channels=int(self.backbone.output_channels), output_channels=int(num_classes))
+        self.head = RangeConvHead(
+            input_channels=int(self.backbone.output_channels),
+            output_channels=int(num_classes),
+        )
 
     def prepare_runtime(self) -> None:
         self.behavior_impl.prepare_runtime(self)
@@ -183,21 +234,81 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         return self.head(hidden)
 
     def predict_range_labels(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.behavior_impl.predict_range_labels(self, batch)
+        if isinstance(self.behavior_impl, DiffusionBehavior):
+            cond, labels, valid = self.prepare_range_batch(batch)
+            x0 = self.behavior_impl.ddpm.sample(
+                self.predict_diffusion_target,
+                cond,
+                sample_shape=(cond.shape[0], int(self.hparams.num_classes), cond.shape[2], cond.shape[3]),
+            )
+            preds = x0.argmax(dim=1)
+            preds = torch.where(valid, preds, torch.zeros_like(preds))
+            return preds, labels
+        logits, labels, valid = self.predict_range_logits(batch)
+        preds = logits.argmax(dim=1)
+        preds = torch.where(valid, preds, torch.zeros_like(preds))
+        return preds, labels
+
+    def compute_supervised_stage_output(self, batch: dict) -> dict:
+        logits, labels, valid = self.predict_range_logits(batch)
+        preds = logits.argmax(dim=1)
+        batch_size = int(batch["range_images"].shape[0])
+
+        if not bool(valid.any()):
+            loss = logits.sum() * 0.0
+            return {
+                "loss": loss,
+                "preds": torch.zeros_like(labels),
+                "labels": labels,
+                "metric_mask": valid,
+                "batch_size": batch_size,
+            }
+
+        target = labels.clone()
+        target[~valid] = -100
+        loss = F.cross_entropy(logits, target, weight=self.class_weights, ignore_index=-100)
+        return {
+            "loss": loss,
+            "preds": preds,
+            "labels": labels,
+            "metric_mask": valid,
+            "batch_size": batch_size,
+        }
+
+    def compute_diffusion_training_stage_output(self, batch: dict, ddpm) -> dict:
+        cond, labels, valid = self.prepare_range_batch(batch)
+        batch_size = int(batch["range_images"].shape[0])
+        x0 = labels_to_soft_range(labels, int(self.hparams.num_classes), valid)
+        t = torch.randint(1, ddpm.T + 1, (cond.shape[0],), device=self.device, dtype=torch.long)
+        x_t, eps = ddpm.q_sample(x0, t)
+        eps_pred = self.predict_diffusion_target(x_t, t, cond)
+        loss = ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=self.class_weights, class_dim=1)
+        return {
+            "loss": loss,
+            "batch_size": batch_size,
+        }
+
+    def compute_diffusion_evaluation_stage_output(self, batch: dict, ddpm) -> dict:
+        cond, labels, valid = self.prepare_range_batch(batch)
+        batch_size = int(batch["range_images"].shape[0])
+        x0 = labels_to_soft_range(labels, int(self.hparams.num_classes), valid)
+        t = torch.ones(cond.shape[0], device=self.device, dtype=torch.long)
+        x_t, eps = ddpm.q_sample(x0, t)
+        eps_pred = self.predict_diffusion_target(x_t, t, cond)
+        loss = ddpm.loss(eps_pred, eps, valid, labels=labels, class_weights=None, class_dim=1)
+        preds, labels = self.predict_range_labels(batch)
+        return {
+            "loss": loss,
+            "preds": preds,
+            "labels": labels,
+            "metric_mask": valid & (labels > 0),
+            "batch_size": batch_size,
+        }
 
     def _compute_stage_output(
         self,
         batch: dict,
         *,
-        stage: str,
         evaluation: bool,
     ) -> dict:
-        return self.behavior_impl.compute_range_stage_output(
-            self,
-            batch,
-            stage=stage,
-            evaluation=evaluation,
-        )
-
-    def configure_optimizers(self):
-        return self.behavior_impl.configure_optimizers(self)
+        return self.behavior_impl.compute_stage_output(self, batch, evaluation=evaluation)

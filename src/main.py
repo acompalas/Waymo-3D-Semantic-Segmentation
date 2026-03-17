@@ -17,7 +17,6 @@ from .runtime.registry import (
     backbone_choices,
     behavior_choices,
     get_model_selection,
-    head_choices,
     maybe_add_component_train_args,
     representation_choices,
 )
@@ -112,7 +111,6 @@ def add_component_args(
     parser.add_argument("--representation", type=str, required=True, choices=representation_choices())
     parser.add_argument("--behavior", type=str, required=True, choices=behavior_choices(representation))
     parser.add_argument("--backbone", type=str, required=True, choices=backbone_choices(representation, behavior))
-    parser.add_argument("--head", type=str, required=True, choices=head_choices(representation, behavior))
 
 
 def build_parser(
@@ -121,7 +119,6 @@ def build_parser(
     representation: str | None = None,
     behavior: str | None = None,
     backbone: str | None = None,
-    head: str | None = None,
 ) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Componentized LiDAR semantic segmentation CLI.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -137,7 +134,6 @@ def build_parser(
                     representation=representation,
                     behavior=behavior,
                     backbone=backbone,
-                    head=head,
                 )
         elif name == "evaluate":
             add_common_eval_args(sub)
@@ -156,13 +152,12 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         representation=getattr(known, "representation", None),
         behavior=getattr(known, "behavior", None),
         backbone=getattr(known, "backbone", None),
-        head=getattr(known, "head", None),
     )
     return full_parser.parse_args(argv)
 
 
 def selection_for(args: argparse.Namespace):
-    return get_model_selection(args.representation, args.backbone, args.head, args.behavior)
+    return get_model_selection(args.representation, args.backbone, args.behavior)
 
 
 def data_dir_for(args: argparse.Namespace) -> Path:
@@ -254,7 +249,6 @@ def configure_trainer(args: argparse.Namespace, logger, callbacks: list) -> L.Tr
 def _validate_loaded_model_selection(model, selection) -> None:
     expected = {
         "backbone": selection.backbone,
-        "head": selection.head,
         "behavior": selection.behavior,
     }
     for key, value in expected.items():
