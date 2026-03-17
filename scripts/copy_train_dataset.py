@@ -147,17 +147,24 @@ def copy_train_split_dataset(
     segment_source_records = _read_json(source_dir / SEGMENT_SOURCE_FILENAME)
     filtered_records, kept_segments = _filtered_segment_source(segment_source_records, str(source_subdir))
 
+    print(f"Preparing to copy {len(kept_segments)} '{source_subdir}' segments for {dataset_name}.", flush=True)
+    print(f"Source:      {source_dir}", flush=True)
+    print(f"Destination: {dest_dir}", flush=True)
+
     _prepare_output_dir(dest_dir, overwrite=bool(overwrite))
+    print("Copying dataset metadata...", flush=True)
     _copy_metadata_files(source_dir, dest_dir)
     _write_json(dest_dir / SEGMENT_SOURCE_FILENAME, filtered_records, sort_keys=False)
 
     dest_segments_dir = dest_dir / "segments"
     dest_segments_dir.mkdir(parents=True, exist_ok=False)
-    for segment in kept_segments:
+    for index, segment in enumerate(kept_segments, start=1):
         segment_source_dir = segments_source_dir / segment
         if not segment_source_dir.is_dir():
             raise FileNotFoundError(f"Segment listed in metadata but missing on disk: {segment_source_dir}")
+        print(f"[{index}/{len(kept_segments)}] Copying segment: {segment}", flush=True)
         shutil.copytree(segment_source_dir, dest_segments_dir / segment, copy_function=shutil.copy2)
+        print(f"[{index}/{len(kept_segments)}] Finished segment: {segment}", flush=True)
 
     return dest_dir
 
