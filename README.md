@@ -158,7 +158,7 @@ These are required for every command.
 | `--max-cached-segments` | segment cache size inside dataset loaders | `2` |
 | `--accelerator` | Lightning accelerator setting | `"auto"` |
 | `--devices` | Lightning device setting | `"auto"` |
-| `--precision` | Lightning precision setting | `"32"` |
+| `--precision` | Lightning precision setting | `"bf16-mixed"` |
 | `--seed` | random seed | `0` |
 | `--output-dir` | local checkpoint / W&B cache root | `output` |
 | `--wandb-project` | W&B project name | `"ece271b-final-project"` |
@@ -170,6 +170,7 @@ These are required for every command.
 | `--val-samples-per-segment` | deterministic validation subsample count per segment; `None` resolves to behavior-dependent default | `None` |
 | `--auto-evaluate` | run final checkpoint evaluation automatically after training | `True` |
 | `--no-auto-evaluate` | disable final automatic evaluation | `False` |
+| `--float32-matmul-precision` | PyTorch float32 matmul precision mode; choices: `highest`, `high`, `medium` | `"medium"` |
 | `--diffusion-steps` | diffusion schedule length; diffusion models only | `1000` |
 
 ### `evaluate` arguments
@@ -190,7 +191,7 @@ These are required for every command.
 | `--max-cached-segments` | segment cache size | `2` |
 | `--accelerator` | Lightning/runtime accelerator setting | `"auto"` |
 | `--devices` | Lightning/runtime device setting | `"auto"` |
-| `--precision` | Lightning precision setting | `"32"` |
+| `--precision` | Lightning precision setting | `"bf16-mixed"` |
 | `--seed` | random seed | `0` |
 | `--output-dir` | local W&B cache root | `output/eval` |
 | `--wandb-project` | W&B project name | `"ece271b-final-project"` |
@@ -198,6 +199,7 @@ These are required for every command.
 | `--wandb-run-name` | explicit W&B run name | `None` |
 | `--wandb-tags` | comma-separated W&B tags | `""` |
 | `--log-pointcloud-count` | audit point clouds logged per split | `4` |
+| `--float32-matmul-precision` | PyTorch float32 matmul precision mode; choices: `highest`, `high`, `medium` | `"medium"` |
 
 ### `render` arguments
 
@@ -218,6 +220,7 @@ These are required for every command.
 | `--height` | render height | `720` |
 | `--point-size` | rendered point size | `2.5` |
 | `--device` | render-time device selection; choices: `auto`, `cuda`, `mps`, `cpu` | `"auto"` |
+| `--float32-matmul-precision` | PyTorch float32 matmul precision mode; choices: `highest`, `high`, `medium` | `"medium"` |
 
 ## Backbone-Specific Training Arguments
 

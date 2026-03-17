@@ -25,6 +25,15 @@ from .runtime.wandb_logging import WandbSegmentationCallback, log_audit_pointclo
 from .tools import label_colors, render_point_cloud, save_gif
 
 
+def add_torch_runtime_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--float32-matmul-precision",
+        type=str,
+        default="medium",
+        choices=("highest", "high", "medium"),
+    )
+
+
 def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--point-data-dir", type=Path, default=Path("data/preprocessed/point_clouds"))
     parser.add_argument("--range-data-dir", type=Path, default=Path("data/preprocessed/range_images"))
@@ -49,7 +58,7 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-cached-segments", type=int, default=2)
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=str, default="auto")
-    parser.add_argument("--precision", type=str, default="32")
+    parser.add_argument("--precision", type=str, default="bf16-mixed")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=Path("output"))
     parser.add_argument("--wandb-project", type=str, default="ece271b-final-project")
@@ -62,6 +71,7 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--auto-evaluate", dest="auto_evaluate", action="store_true")
     parser.add_argument("--no-auto-evaluate", dest="auto_evaluate", action="store_false")
     parser.set_defaults(auto_evaluate=True)
+    add_torch_runtime_args(parser)
 
 
 def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
@@ -79,7 +89,7 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-cached-segments", type=int, default=2)
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=str, default="auto")
-    parser.add_argument("--precision", type=str, default="32")
+    parser.add_argument("--precision", type=str, default="bf16-mixed")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output-dir", type=Path, default=Path("output/eval"))
     parser.add_argument("--wandb-project", type=str, default="ece271b-final-project")
@@ -87,6 +97,7 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wandb-run-name", type=str, default=None)
     parser.add_argument("--wandb-tags", type=str, default="")
     parser.add_argument("--log-pointcloud-count", type=int, default=4)
+    add_torch_runtime_args(parser)
 
 
 def add_common_render_args(parser: argparse.ArgumentParser) -> None:
@@ -105,6 +116,7 @@ def add_common_render_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--point-size", type=float, default=2.5)
     parser.add_argument("--device", type=str, default="auto", choices=["auto", "cuda", "mps", "cpu"])
+    add_torch_runtime_args(parser)
 
 
 def add_component_args(
@@ -245,6 +257,11 @@ def log_cli_hyperparams(
     args: argparse.Namespace,
 ) -> None:
     logger.log_hyperparams(build_cli_hparams_payload(args))
+
+
+def configure_torch_runtime(args: argparse.Namespace) -> None:
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision(str(getattr(args, "float32_matmul_precision", "medium")))
 
 
 def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
@@ -488,6 +505,7 @@ def run_render(args: argparse.Namespace) -> None:
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = parse_args(argv)
+    configure_torch_runtime(args)
     if args.command == "train":
         run_train(args)
     elif args.command == "evaluate":
