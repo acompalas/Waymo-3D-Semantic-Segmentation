@@ -49,9 +49,9 @@ def _build_handcrafted(**kwargs) -> nn.Module:
         scales=kwargs.get("knn_scales", (16, 32, 64)),
         knn_support_size=kwargs.get("knn_support_size", 16384),
         knn_query_chunk=kwargs.get("knn_query_chunk", 4096),
-        proj_dim=kwargs.get("proj_dim", 0),
-        proj_depth=kwargs.get("proj_depth", 0),
-        proj_dropout=kwargs.get("proj_dropout", 0.0),
+        hidden_dim=kwargs.get("hidden_dim", 0),
+        depth=kwargs.get("depth", 0),
+        dropout=kwargs.get("dropout", 0.0),
     )
 
 

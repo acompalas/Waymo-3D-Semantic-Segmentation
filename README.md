@@ -223,9 +223,9 @@ These arguments are only added to the `train` CLI when the chosen backbone decla
 | `--knn-scales` | comma-separated neighborhood sizes used for handcrafted features | `"16,32,64"` |
 | `--knn-support-size` | max support set size per KNN pass | `16384` |
 | `--knn-query-chunk` | chunk size for KNN queries | `4096` |
-| `--proj-dim` | width of optional learned post-MLP adapter | `0` |
-| `--proj-depth` | depth of optional learned post-MLP adapter; `0` disables it | `0` |
-| `--proj-dropout` | dropout in the optional post-MLP adapter | `0.0` |
+| `--hidden-dim` | width of the optional learned post-MLP adapter | `0` |
+| `--depth` | depth of the optional learned post-MLP adapter; `0` disables it | `0` |
+| `--dropout` | dropout in the optional learned post-MLP adapter | `0.0` |
 
 ### `unet`
 

@@ -64,16 +64,13 @@ class ModelSelection:
         if self.representation == "point_clouds":
             return module_cls(
                 **common,
-                hidden_dim=getattr(args, "hidden_dim", 256),
-                depth=getattr(args, "depth", 6),
+                hidden_dim=getattr(args, "hidden_dim", None),
+                depth=getattr(args, "depth", None),
                 knn_k=getattr(args, "knn_k", 16),
-                dropout=getattr(args, "dropout", 0.1),
+                dropout=getattr(args, "dropout", None),
                 knn_scales=_parse_scales(getattr(args, "knn_scales", "16,32,64")),
                 knn_support_size=getattr(args, "knn_support_size", 16384),
                 knn_query_chunk=getattr(args, "knn_query_chunk", 4096),
-                proj_dim=getattr(args, "proj_dim", 0),
-                proj_depth=getattr(args, "proj_depth", 0),
-                proj_dropout=getattr(args, "proj_dropout", 0.0),
             )
         return module_cls(
             **common,

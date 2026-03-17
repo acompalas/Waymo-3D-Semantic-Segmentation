@@ -19,10 +19,12 @@ class RegistryCliTests(unittest.TestCase):
                 "supervised",
                 "--backbone",
                 "handcrafted",
-                "--proj-dim",
+                "--hidden-dim",
                 "64",
-                "--proj-depth",
+                "--depth",
                 "2",
+                "--dropout",
+                "0.1",
                 "--val-samples-per-segment",
                 "3",
                 "--geometry-only",
@@ -35,8 +37,9 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(args.representation, "point_clouds")
         self.assertEqual(args.behavior, "supervised")
         self.assertEqual(args.backbone, "handcrafted")
-        self.assertEqual(args.proj_dim, 64)
-        self.assertEqual(args.proj_depth, 2)
+        self.assertEqual(args.hidden_dim, 64)
+        self.assertEqual(args.depth, 2)
+        self.assertEqual(args.dropout, 0.1)
         self.assertEqual(args.val_samples_per_segment, 3)
         self.assertEqual(args.log_pointcloud_count, 4)
         self.assertEqual(args.weight_decay, 0.01)

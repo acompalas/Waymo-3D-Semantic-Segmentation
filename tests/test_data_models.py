@@ -289,9 +289,9 @@ class DataAndModelTests(unittest.TestCase):
             num_classes=23,
             backbone="handcrafted",
             behavior="supervised",
-            proj_dim=64,
-            proj_depth=2,
-            proj_dropout=0.1,
+            hidden_dim=64,
+            depth=2,
+            dropout=0.1,
         )
         self.assertEqual(projected.backbone.output_dim, 64)
         self.assertEqual(projected.head.net[1].in_features, 64)

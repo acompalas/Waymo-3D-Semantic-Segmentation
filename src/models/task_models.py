@@ -18,24 +18,30 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         weight_decay: float = 1e-4,
         backbone: str = "edgeconv",
         behavior: str = "supervised",
-        hidden_dim: int = 256,
-        depth: int = 6,
+        hidden_dim: int | None = None,
+        depth: int | None = None,
         knn_k: int = 16,
-        dropout: float = 0.1,
+        dropout: float | None = None,
         diffusion_steps: int = 1000,
         use_balanced_class_weights: bool = True,
         geometry_only: bool = False,
         knn_scales: tuple[int, ...] = (16, 32, 64),
         knn_support_size: int = 16384,
         knn_query_chunk: int = 4096,
-        proj_dim: int = 0,
-        proj_depth: int = 0,
-        proj_dropout: float = 0.0,
     ) -> None:
         super().__init__(
             num_classes=num_classes,
             use_balanced_class_weights=use_balanced_class_weights,
         )
+        backbone_name = str(backbone)
+        if backbone_name == "handcrafted":
+            hidden_dim = 0 if hidden_dim is None else int(hidden_dim)
+            depth = 0 if depth is None else int(depth)
+            dropout = 0.0 if dropout is None else float(dropout)
+        else:
+            hidden_dim = 256 if hidden_dim is None else int(hidden_dim)
+            depth = 6 if depth is None else int(depth)
+            dropout = 0.1 if dropout is None else float(dropout)
         self.save_hyperparameters()
         self.behavior_impl = build_behavior(behavior, diffusion_steps=int(diffusion_steps))
         model_input_dim = point_input_dim(geometry_only=bool(geometry_only))
@@ -44,19 +50,16 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
             num_classes=int(num_classes),
         )
         self.backbone = build_point_backbone(
-            str(backbone),
+            backbone_name,
             input_dim=backbone_input_dim,
-            hidden_dim=int(hidden_dim),
-            depth=int(depth),
-            dropout=float(dropout),
+            hidden_dim=hidden_dim,
+            depth=depth,
+            dropout=dropout,
             knn_k=int(knn_k),
             time_dim=self.behavior_impl.time_dim,
             knn_scales=tuple(int(k) for k in knn_scales),
             knn_support_size=int(knn_support_size),
             knn_query_chunk=int(knn_query_chunk),
-            proj_dim=int(proj_dim),
-            proj_depth=int(proj_depth),
-            proj_dropout=float(proj_dropout),
         )
         self.head = PointMLPHead(input_dim=int(self.backbone.output_dim), output_dim=int(num_classes))
 
