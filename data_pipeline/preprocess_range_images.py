@@ -138,6 +138,11 @@ def _resolve_progress_style(args: argparse.Namespace) -> str:
     return str(args.progress_style)
 
 
+def _log_print_progress(progress_style: str, message: str) -> None:
+    if str(progress_style) == "print":
+        print(message, flush=True)
+
+
 def _to_name(enum_key: str) -> str:
     return enum_key.removeprefix("TYPE_").lower()
 
@@ -566,10 +571,13 @@ def _process_segments(
                 raise KeyError(f"Missing lidar/calibration parquet for segment '{segment}' under {root}")
             tasks.append((segment, lidar_path, None, calib_path, False))
 
+    _log_print_progress(progress_style, f"Prepared {len(tasks)} segment jobs.")
+
     if num_workers <= 1:
         progress = _ProgressReporter(total=len(tasks), style=progress_style, desc="segments")
         try:
             for segment, lidar_path, seg_path, calib_path, is_labeled in tasks:
+                _log_print_progress(progress_style, f"Starting segment: {segment}")
                 done_segment, num_frames = _process_segment_worker(
                     segments_root=segments_root,
                     segment=segment,
@@ -586,6 +594,7 @@ def _process_segments(
         return
 
     max_workers = max(1, int(num_workers))
+    _log_print_progress(progress_style, f"Launching {max_workers} worker processes.")
     progress = _ProgressReporter(total=len(tasks), style=progress_style, desc="segments")
     try:
         with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp.get_context("spawn")) as pool:
@@ -615,8 +624,10 @@ def main() -> None:
     data_dir = args.data_dir
     output_dir = args.output_dir
     laser_id = int(args.laser_id)
+    progress_style = _resolve_progress_style(args)
     labeled_subdirs = _normalize_subdir_list(args.labeled_subdirs)
     unlabeled_subdirs = _normalize_subdir_list(args.unlabeled_subdirs)
+    _log_print_progress(progress_style, f"Resolving source roots under {data_dir} ...")
     source_roots = _resolve_source_roots(
         data_dir=data_dir,
         labeled_subdirs=labeled_subdirs,
@@ -625,6 +636,7 @@ def main() -> None:
     proto_path = _resolve_proto_path(data_dir, args.proto_path)
     unlabeled_subdir_set = set(unlabeled_subdirs)
 
+    _log_print_progress(progress_style, f"Parsing classes from {proto_path} ...")
     classes = parse_classes(proto_path)
     num_classes = max(int(key) for key in classes) + 1
     segment_source_records: list[dict[str, Any]] = []
@@ -633,12 +645,16 @@ def main() -> None:
     for source_subdir, root in source_roots.items():
         is_labeled = source_subdir not in unlabeled_subdir_set
         if is_labeled:
+            _log_print_progress(progress_style, f"Indexing labeled frames for split '{source_subdir}' ...")
             labeled_index = _build_labeled_frame_index(root, laser_id)
             segments = sorted(str(x) for x in labeled_index.get_column(SEGMENT_COL).unique().to_list())
             labeled_source_segments[source_subdir] = segments
         else:
+            _log_print_progress(progress_style, f"Enumerating unlabeled lidar segments for split '{source_subdir}' ...")
             segments = sorted(_map_segment_files(root / "lidar").keys())
             unlabeled_source_segments[source_subdir] = segments
+
+        _log_print_progress(progress_style, f"Found {len(segments)} segments in split '{source_subdir}'.")
 
         segment_source_records.append(
             {
@@ -667,6 +683,7 @@ def main() -> None:
     _write_json(output_dir / "meta.json", _build_root_meta(data_dir=data_dir, laser_id=laser_id))
     _write_json(output_dir / "segment_source.json", segment_source_records, sort_keys=False)
 
+    _log_print_progress(progress_style, f"Wrote metadata to {output_dir}.")
     _process_segments(
         segments_root=segments_root,
         source_roots=source_roots,
@@ -675,7 +692,7 @@ def main() -> None:
         laser_id=laser_id,
         num_classes=num_classes,
         num_workers=int(args.num_workers),
-        progress_style=_resolve_progress_style(args),
+        progress_style=progress_style,
     )
     print(f"Wrote range-image artifacts to: {output_dir}")
 

@@ -78,6 +78,11 @@ def _resolve_progress_style(args: argparse.Namespace) -> str:
     return str(args.progress_style)
 
 
+def _log_print_progress(progress_style: str, message: str) -> None:
+    if str(progress_style) == "print":
+        print(message, flush=True)
+
+
 def _read_json(path: Path) -> Any:
     if not path.exists():
         raise FileNotFoundError(f"Missing required file: {path}")
@@ -349,10 +354,13 @@ def _process_segments(
         if not (in_segments_root / segment).exists():
             raise FileNotFoundError(f"Segment listed in source file but missing in range-dir/segments: {segment}")
 
+    _log_print_progress(progress_style, f"Prepared {len(tasks)} segment jobs.")
+
     if num_workers <= 1:
         progress = _ProgressReporter(total=len(tasks), style=progress_style, desc="segments")
         try:
             for segment, is_labeled in tasks:
+                _log_print_progress(progress_style, f"Starting segment: {segment}")
                 done_segment, num_frames = _process_segment_worker(
                     in_segments_root=in_segments_root,
                     out_segments_root=out_segments_root,
@@ -364,6 +372,7 @@ def _process_segments(
             progress.close()
         return
 
+    _log_print_progress(progress_style, f"Launching {max(1, int(num_workers))} worker processes.")
     progress = _ProgressReporter(total=len(tasks), style=progress_style, desc="segments")
     try:
         with ProcessPoolExecutor(max_workers=max(1, int(num_workers)), mp_context=mp.get_context("spawn")) as pool:
@@ -388,7 +397,9 @@ def main() -> None:
     args = parse_args()
     range_dir = args.range_dir
     output_dir = args.output_dir
+    progress_style = _resolve_progress_style(args)
 
+    _log_print_progress(progress_style, f"Reading range-image metadata from {range_dir} ...")
     input_meta = _read_json(range_dir / "meta.json")
     _validate_range_meta(input_meta, range_dir)
     input_segment_source = _read_json(range_dir / "segment_source.json")
@@ -406,17 +417,19 @@ def main() -> None:
 
     _write_json(output_dir / "meta.json", _build_output_meta(input_meta=input_meta, range_dir=range_dir))
     _write_json(output_dir / "segment_source.json", out_segment_source, sort_keys=False)
+    _log_print_progress(progress_style, f"Wrote metadata to {output_dir}.")
 
     classes_path = range_dir / "classes.json"
     if classes_path.exists():
         shutil.copy2(classes_path, output_dir / "classes.json")
+        _log_print_progress(progress_style, f"Copied classes.json to {output_dir}.")
 
     _process_segments(
         in_segments_root=range_dir / "segments",
         out_segments_root=out_segments_root,
         tasks=tasks,
         num_workers=int(args.num_workers),
-        progress_style=_resolve_progress_style(args),
+        progress_style=progress_style,
     )
     print(f"Wrote dense point-cloud artifacts to: {output_dir}")
 
