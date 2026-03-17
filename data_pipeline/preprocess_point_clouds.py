@@ -186,10 +186,6 @@ def _points_vehicle_dense(
     return points_sensor @ rotation.T + translation
 
 
-def _to_memmap(path: Path, dtype: Any, shape: tuple[int, ...]) -> np.memmap:
-    return np.lib.format.open_memmap(path, mode="w+", dtype=dtype, shape=shape)
-
-
 def _process_segment_worker(
     in_segments_root: Path,
     out_segments_root: Path,
@@ -255,11 +251,11 @@ def _process_segment_worker(
     out_dir = out_segments_root / segment
     out_dir.mkdir(parents=True, exist_ok=False)
 
-    xyz = _to_memmap(out_dir / "xyz.npy", np.float32, (num_frames, 2, height, width, 3))
-    feat = _to_memmap(out_dir / "feat.npy", np.float32, (num_frames, 2, height, width, 2))
-    semantic = _to_memmap(out_dir / "semantic.npy", np.int16, (num_frames, 2, height, width))
-    valid_geometry = _to_memmap(out_dir / "valid_geometry.npy", np.bool_, (num_frames, 2, height, width))
-    valid_label = _to_memmap(out_dir / "valid_label.npy", np.bool_, (num_frames, 2, height, width))
+    xyz = np.empty((num_frames, 2, height, width, 3), dtype=np.float32)
+    feat = np.empty((num_frames, 2, height, width, 2), dtype=np.float32)
+    semantic = np.empty((num_frames, 2, height, width), dtype=np.int16)
+    valid_geometry = np.empty((num_frames, 2, height, width), dtype=np.bool_)
+    valid_label = np.empty((num_frames, 2, height, width), dtype=np.bool_)
 
     for frame_idx in range(num_frames):
         for ret_idx, ri in enumerate((ri1, ri2)):
@@ -292,11 +288,11 @@ def _process_segment_worker(
                 semantic[frame_idx, ret_idx] = -1
                 valid_label[frame_idx, ret_idx] = False
 
-    xyz.flush()
-    feat.flush()
-    semantic.flush()
-    valid_geometry.flush()
-    valid_label.flush()
+    np.save(out_dir / "xyz.npy", xyz)
+    np.save(out_dir / "feat.npy", feat)
+    np.save(out_dir / "semantic.npy", semantic)
+    np.save(out_dir / "valid_geometry.npy", valid_geometry)
+    np.save(out_dir / "valid_label.npy", valid_label)
     np.save(out_dir / "timestamps.npy", timestamps.astype(np.int64, copy=False))
     np.save(out_dir / "class_counts.npy", class_counts.astype(np.int64, copy=False))
     return segment, int(num_frames)
