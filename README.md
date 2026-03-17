@@ -30,7 +30,7 @@ W&B is the reporting backend for metrics, confusion matrices, and audit point cl
 
 | Behavior | Meaning |
 | --- | --- |
-| `supervised` | direct semantic segmentation training with cross-entropy |
+| `direct` | direct semantic segmentation training with cross-entropy |
 | `diffusion` | denoising diffusion training over soft labels; validation/test metrics use real denoising predictions |
 
 ## Available Backbones
@@ -39,26 +39,26 @@ W&B is the reporting backend for metrics, confusion matrices, and audit point cl
 
 | Backbone | Supports | Summary |
 | --- | --- | --- |
-| `pointnet` | `supervised`, `diffusion` | residual per-point MLP stack with global max-pooled context |
-| `edgeconv` | `supervised`, `diffusion` | KNN graph backbone with EdgeConv-style local updates |
-| `pointnetplusplus` | `supervised` | PointNet++ hierarchy with set abstraction and feature propagation |
-| `handcrafted` | `supervised` | multi-scale handcrafted geometric features with optional learned post-MLP |
+| `pointnet` | `direct`, `diffusion` | residual per-point MLP stack with global max-pooled context |
+| `edgeconv` | `direct`, `diffusion` | KNN graph backbone with EdgeConv-style local updates |
+| `pointnetplusplus` | `direct` | PointNet++ hierarchy with set abstraction and feature propagation |
+| `handcrafted` | `direct` | multi-scale handcrafted geometric features with optional learned post-MLP |
 
 ### Range-image backbones
 
 | Backbone | Supports | Summary |
 | --- | --- | --- |
-| `unet` | `supervised` | convolutional UNet encoder-decoder over range images |
+| `unet` | `direct` | convolutional UNet encoder-decoder over range images |
 | `crossattn_unet` | `diffusion` | timestep-conditioned residual UNet with LiDAR conditioning and cross-attention |
 
 ## Quick Start
 
-Train a supervised point-cloud model:
+Train a direct point-cloud model:
 
 ```bash
 python -m src.main train \
   --representation point_clouds \
-  --behavior supervised \
+  --behavior direct \
   --backbone edgeconv
 ```
 
@@ -77,9 +77,9 @@ Evaluate a checkpoint:
 ```bash
 python -m src.main evaluate \
   --representation point_clouds \
-  --behavior supervised \
+  --behavior direct \
   --backbone handcrafted \
-  --checkpoint output/point_clouds__handcrafted__supervised/.../checkpoints/last.ckpt
+  --checkpoint output/point_clouds__handcrafted__direct/.../checkpoints/last.ckpt
 ```
 
 Render a checkpoint:
@@ -87,9 +87,9 @@ Render a checkpoint:
 ```bash
 python -m src.main render \
   --representation range_images \
-  --behavior supervised \
+  --behavior direct \
   --backbone unet \
-  --checkpoint output/range_images__unet__supervised/.../checkpoints/last.ckpt
+  --checkpoint output/range_images__unet__direct/.../checkpoints/last.ckpt
 ```
 
 ## CLI Arguments
@@ -101,7 +101,7 @@ These are required for every command.
 | Argument | Description | Default |
 | --- | --- | --- |
 | `--representation` | data/model representation; choices: `point_clouds`, `range_images` | required |
-| `--behavior` | training/inference behavior; choices: `supervised`, `diffusion` | required |
+| `--behavior` | training/inference behavior; choices: `direct`, `diffusion` | required |
 | `--backbone` | backbone name; valid choices depend on representation and behavior | required |
 
 ### `train` arguments
@@ -123,7 +123,7 @@ These are required for every command.
 | `--lr` | learning rate | `1e-3` |
 | `--weight-decay` | optimizer weight decay | `1e-4` |
 | `--class-weight-alpha` | class-weight exponent in `(1 / count)^alpha`; `0` disables weighting | `1.0` |
-| `--focal-loss-gamma` | focal-loss gamma for supervised training; `0` recovers cross-entropy | `0.0` |
+| `--focal-loss-gamma` | focal-loss gamma for direct training; `0` recovers cross-entropy | `0.0` |
 | `--early-stopping-patience` | early stopping patience in epochs | `2` |
 | `--early-stopping-min-delta` | minimum improvement for early stopping | `0.0` |
 | `--train-segment-fraction` | fraction of train segments to keep | `1.0` |
@@ -315,7 +315,7 @@ python data_pipeline/preprocess_point_clouds.py \
 - preprocessing stores per-frame class counts in both representations so datasets can read frame-level counts directly and aggregate class totals without rescanning labels
 - `--val-samples-per-segment` controls deterministic validation subsampling
 - when omitted, validation defaults are:
-  - supervised: full validation set
+  - direct: full validation set
   - diffusion: `1` frame per segment
 - metrics only use `valid_label`
 - class `0` is excluded from mIoU and displayed confusion matrices
@@ -342,7 +342,7 @@ The intended extension path is small and consistent.
    - the spec should declare `supported_behaviors`
    - it should provide the backbone builder
    - it should point at the backbone's CLI-arg function
-5. Declare `supported_behaviors`, for example `("supervised",)` or `("supervised", "diffusion")`.
+5. Declare `supported_behaviors`, for example `("direct",)` or `("direct", "diffusion")`.
 6. Add the spec constant to `POINT_BACKBONE_SPECS` in `src/models/backbones/point/registry.py`.
 
 ### Add a new range-image backbone

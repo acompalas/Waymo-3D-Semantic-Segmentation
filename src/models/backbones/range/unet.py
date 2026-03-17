@@ -68,7 +68,7 @@ def _build_unet(**kwargs) -> nn.Module:
 
 
 UNET_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
-    supported_behaviors=("supervised",),
+    supported_behaviors=("direct",),
     build=_build_unet,
     add_args_with_names=add_range_unet_backbone_args,
 )

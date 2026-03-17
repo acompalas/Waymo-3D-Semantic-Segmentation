@@ -9,14 +9,14 @@ class RegistryCliTests(unittest.TestCase):
     def test_registry_has_expected_representations(self) -> None:
         self.assertEqual(representation_choices(), ["point_clouds", "range_images"])
 
-    def test_point_supervised_parser_accepts_component_selection(self) -> None:
+    def test_point_direct_parser_accepts_component_selection(self) -> None:
         args = parse_args(
             [
                 "train",
                 "--representation",
                 "point_clouds",
                 "--behavior",
-                "supervised",
+                "direct",
                 "--backbone",
                 "handcrafted",
                 "--hidden-dim",
@@ -39,7 +39,7 @@ class RegistryCliTests(unittest.TestCase):
         )
         self.assertEqual(args.command, "train")
         self.assertEqual(args.representation, "point_clouds")
-        self.assertEqual(args.behavior, "supervised")
+        self.assertEqual(args.behavior, "direct")
         self.assertEqual(args.backbone, "handcrafted")
         self.assertEqual(args.hidden_dim, 64)
         self.assertEqual(args.depth, 2)
@@ -75,7 +75,7 @@ class RegistryCliTests(unittest.TestCase):
                 "--representation",
                 "range_images",
                 "--behavior",
-                "supervised",
+                "direct",
                 "--backbone",
                 "unet",
                 "--checkpoint",
@@ -92,7 +92,7 @@ class RegistryCliTests(unittest.TestCase):
                 "--representation",
                 "range_images",
                 "--behavior",
-                "supervised",
+                "direct",
                 "--backbone",
                 "unet",
                 "--point-data-dir",
@@ -113,7 +113,7 @@ class RegistryCliTests(unittest.TestCase):
                     "--representation",
                     "point_clouds",
                     "--behavior",
-                    "supervised",
+                    "direct",
                     "--backbone",
                     "handcrafted",
                     "--data-dir",
@@ -125,11 +125,11 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(backbone_choices("point_clouds", "diffusion"), ["edgeconv", "pointnet"])
 
     def test_selection_builds_composite_model_id(self) -> None:
-        selection = get_model_selection("point_clouds", "edgeconv", "supervised")
-        self.assertEqual(selection.model_id, "point_clouds__edgeconv__supervised")
+        selection = get_model_selection("point_clouds", "edgeconv", "direct")
+        self.assertEqual(selection.model_id, "point_clouds__edgeconv__direct")
 
     def test_default_wandb_run_name_uses_representation_backbone_and_timestamp(self) -> None:
-        selection = get_model_selection("point_clouds", "edgeconv", "supervised")
+        selection = get_model_selection("point_clouds", "edgeconv", "direct")
         self.assertEqual(_default_wandb_run_name(selection, "20260316-154500"), "point_clouds-edgeconv-20260316-154500")
 
     def test_old_head_cli_arg_is_rejected(self) -> None:
@@ -140,7 +140,7 @@ class RegistryCliTests(unittest.TestCase):
                     "--representation",
                     "point_clouds",
                     "--behavior",
-                    "supervised",
+                    "direct",
                     "--backbone",
                     "handcrafted",
                     "--head",

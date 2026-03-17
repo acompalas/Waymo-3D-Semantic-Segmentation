@@ -75,7 +75,7 @@ def _build_pointnet(**kwargs) -> nn.Module:
 
 
 POINTNET_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
-    supported_behaviors=("supervised", "diffusion"),
+    supported_behaviors=("direct", "diffusion"),
     build=_build_pointnet,
     add_args_with_names=add_pointnet_backbone_args,
 )

@@ -70,7 +70,7 @@ def _build_edgeconv(**kwargs) -> nn.Module:
 
 
 EDGECONV_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
-    supported_behaviors=("supervised", "diffusion"),
+    supported_behaviors=("direct", "diffusion"),
     build=_build_edgeconv,
     add_args_with_names=add_edgeconv_backbone_args,
 )

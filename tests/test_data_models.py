@@ -117,12 +117,12 @@ class DataAndModelTests(unittest.TestCase):
         point_frame = point_ds.get_dense_frame("segment_train", 100)
         range_frame = range_ds.get_frame_data("segment_train", 100)
 
-        point_supervised = PointCloudTaskModel(
+        point_direct = PointCloudTaskModel(
             num_classes=23,
             backbone="handcrafted",
-            behavior="supervised",
+            behavior="direct",
         )
-        point_prediction = point_supervised.predict_segmented_pointcloud(point_frame=point_frame)
+        point_prediction = point_direct.predict_segmented_pointcloud(point_frame=point_frame)
         self.assertEqual(sorted(point_prediction), ["points_xyz", "pred_labels", "true_labels", "valid_label"])
 
         point_diffusion = PointCloudTaskModel(
@@ -136,14 +136,14 @@ class DataAndModelTests(unittest.TestCase):
         point_prediction = point_diffusion.predict_segmented_pointcloud(point_frame=point_frame)
         self.assertEqual(point_prediction["pred_labels"].ndim, 1)
 
-        range_supervised = RangeImageTaskModel(
+        range_direct = RangeImageTaskModel(
             num_classes=23,
             base_channels=4,
             depth=2,
             backbone="unet",
-            behavior="supervised",
+            behavior="direct",
         )
-        range_prediction = range_supervised.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
+        range_prediction = range_direct.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
         self.assertEqual(range_prediction["pred_labels"].ndim, 1)
 
         range_diffusion = RangeImageTaskModel(
@@ -196,11 +196,11 @@ class DataAndModelTests(unittest.TestCase):
 
         models_and_batches = [
             (
-                PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised"),
+                PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct"),
                 point_batch,
             ),
             (
-                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, backbone="edgeconv", behavior="supervised"),
+                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, backbone="edgeconv", behavior="direct"),
                 point_batch,
             ),
             (
@@ -208,7 +208,7 @@ class DataAndModelTests(unittest.TestCase):
                 point_batch,
             ),
             (
-                RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", behavior="supervised"),
+                RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", behavior="direct"),
                 range_batch,
             ),
             (
@@ -266,8 +266,8 @@ class DataAndModelTests(unittest.TestCase):
         self.assertEqual(val_output["preds"].shape, val_output["labels"].shape)
 
     def test_all_task_models_share_default_optimizer_policy(self) -> None:
-        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
-        range_model = RangeImageTaskModel(num_classes=23, backbone="unet", behavior="supervised")
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
+        range_model = RangeImageTaskModel(num_classes=23, backbone="unet", behavior="direct")
         trainer_stub = type("TrainerStub", (), {"max_epochs": 5})()
 
         point_model._trainer = trainer_stub
@@ -290,12 +290,12 @@ class DataAndModelTests(unittest.TestCase):
     def test_point_backbones_accept_xyz_and_validate_timestep_support(self) -> None:
         xyz = torch.randn(1, 8, 3)
         inputs = torch.randn(1, 8, 5)
-        pointnet = PointCloudTaskModel(num_classes=23, backbone="pointnet", behavior="supervised")
+        pointnet = PointCloudTaskModel(num_classes=23, backbone="pointnet", behavior="direct")
         self.assertEqual(pointnet.backbone(inputs, xyz=xyz).shape[:2], (1, 8))
         with self.assertRaises(ValueError):
             pointnet.backbone(inputs, xyz=xyz, t=torch.ones(1, dtype=torch.long))
 
-        pointnetpp = PointCloudTaskModel(num_classes=23, backbone="pointnetplusplus", behavior="supervised")
+        pointnetpp = PointCloudTaskModel(num_classes=23, backbone="pointnetplusplus", behavior="direct")
         self.assertEqual(pointnetpp.backbone(inputs, xyz=xyz).shape[:2], (1, 8))
         with self.assertRaises(ValueError):
             pointnetpp.backbone(inputs, xyz=xyz, t=torch.ones(1, dtype=torch.long))
@@ -313,7 +313,7 @@ class DataAndModelTests(unittest.TestCase):
             diffusion_model.backbone(diffusion_inputs, xyz=xyz)
 
     def test_handcrafted_backbone_uses_shared_head(self) -> None:
-        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
+        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
         self.assertEqual(model.head.net[-1].out_features, 23)
         self.assertEqual(model.backbone.output_dim, model.head.net[1].in_features)
         self.assertIsInstance(model.backbone.post_mlp, torch.nn.Identity)
@@ -321,7 +321,7 @@ class DataAndModelTests(unittest.TestCase):
         projected = PointCloudTaskModel(
             num_classes=23,
             backbone="handcrafted",
-            behavior="supervised",
+            behavior="direct",
             hidden_dim=64,
             depth=2,
             dropout=0.1,
@@ -331,25 +331,25 @@ class DataAndModelTests(unittest.TestCase):
         self.assertFalse(isinstance(projected.backbone.post_mlp, torch.nn.Identity))
 
     def test_geometry_only_switches_selected_input_dimensions(self) -> None:
-        point_supervised = PointCloudTaskModel(
+        point_direct = PointCloudTaskModel(
             num_classes=23,
             hidden_dim=32,
             depth=2,
             backbone="edgeconv",
-            behavior="supervised",
+            behavior="direct",
             geometry_only=False,
         )
-        self.assertEqual(point_supervised.backbone.in_proj.in_features, 5)
+        self.assertEqual(point_direct.backbone.in_proj.in_features, 5)
 
-        point_supervised_geom = PointCloudTaskModel(
+        point_direct_geom = PointCloudTaskModel(
             num_classes=23,
             hidden_dim=32,
             depth=2,
             backbone="edgeconv",
-            behavior="supervised",
+            behavior="direct",
             geometry_only=True,
         )
-        self.assertEqual(point_supervised_geom.backbone.in_proj.in_features, 3)
+        self.assertEqual(point_direct_geom.backbone.in_proj.in_features, 3)
 
         point_diffusion = PointCloudTaskModel(
             num_classes=23,
@@ -378,7 +378,7 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             depth=2,
             backbone="unet",
-            behavior="supervised",
+            behavior="direct",
             geometry_only=False,
         )
         self.assertEqual(range_unet.backbone.encoders[0].conv1.conv.in_channels, 4)
@@ -388,7 +388,7 @@ class DataAndModelTests(unittest.TestCase):
             base_channels=4,
             depth=2,
             backbone="unet",
-            behavior="supervised",
+            behavior="direct",
             geometry_only=True,
         )
         self.assertEqual(range_unet_geom.backbone.encoders[0].conv1.conv.in_channels, 1)

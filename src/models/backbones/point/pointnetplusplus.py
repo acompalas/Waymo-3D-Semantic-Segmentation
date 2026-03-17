@@ -107,7 +107,7 @@ def _build_pointnetplusplus(**kwargs) -> nn.Module:
 
 
 POINTNETPLUSPLUS_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
-    supported_behaviors=("supervised",),
+    supported_behaviors=("direct",),
     build=_build_pointnetplusplus,
     add_args_with_names=add_pointnetplusplus_backbone_args,
 )

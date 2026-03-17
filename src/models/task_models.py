@@ -17,7 +17,7 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
         backbone: str = "edgeconv",
-        behavior: str = "supervised",
+        behavior: str = "direct",
         hidden_dim: int | None = None,
         depth: int | None = None,
         knn_k: int = 16,
@@ -111,7 +111,7 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         batch_size = int(points.shape[0])
         return points, point_features, labels, valid_label, valid_geometry, batch_size
 
-    def compute_supervised_stage_output(self, batch: dict) -> dict:
+    def compute_direct_stage_output(self, batch: dict) -> dict:
         points, point_features, labels, valid_label, valid_geometry, batch_size = self._point_batch_tensors(batch)
         logits = self.predict_logits(points, point_features)
         preds = logits.argmax(dim=-1)
@@ -189,7 +189,7 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         learning_rate: float = 1e-3,
         weight_decay: float = 1e-4,
         backbone: str = "unet",
-        behavior: str = "supervised",
+        behavior: str = "direct",
         base_channels: int = 32,
         depth: int = 4,
         dropout: float = 0.0,
@@ -259,7 +259,7 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         preds = torch.where(valid, preds, torch.zeros_like(preds))
         return preds, labels
 
-    def compute_supervised_stage_output(self, batch: dict) -> dict:
+    def compute_direct_stage_output(self, batch: dict) -> dict:
         logits, labels, valid = self.predict_range_logits(batch)
         preds = logits.argmax(dim=1)
         batch_size = int(batch["range_images"].shape[0])

@@ -114,7 +114,7 @@ def representation_choices() -> list[str]:
 
 
 def behavior_choices(_representation: str | None = None) -> list[str]:
-    return ["diffusion", "supervised"]
+    return ["diffusion", "direct"]
 
 
 def backbone_choices(representation: str | None = None, behavior: str | None = None) -> list[str]:

@@ -80,7 +80,7 @@ def _build_handcrafted(**kwargs) -> nn.Module:
 
 
 HANDCRAFTED_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
-    supported_behaviors=("supervised",),
+    supported_behaviors=("direct",),
     build=_build_handcrafted,
     add_args_with_names=add_handcrafted_backbone_args,
 )

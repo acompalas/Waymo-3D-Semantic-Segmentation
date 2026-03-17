@@ -1,7 +1,7 @@
 from .diffusion import DDPM
 
 
-class SupervisedBehavior:
+class DirectBehavior:
     time_dim: int | None = None
 
     @staticmethod
@@ -14,7 +14,7 @@ class SupervisedBehavior:
 
     def compute_stage_output(self, model, batch: dict, *, evaluation: bool) -> dict:
         _ = evaluation
-        return model.compute_supervised_stage_output(batch)
+        return model.compute_direct_stage_output(batch)
 
 
 class DiffusionBehavior:
@@ -38,8 +38,8 @@ class DiffusionBehavior:
 
 def build_behavior(behavior: str, *, diffusion_steps: int):
     key = str(behavior).lower()
-    if key == "supervised":
-        return SupervisedBehavior()
+    if key == "direct":
+        return DirectBehavior()
     if key == "diffusion":
         return DiffusionBehavior(diffusion_steps=int(diffusion_steps))
     raise ValueError(f"Unsupported behavior '{behavior}'.")

@@ -81,11 +81,11 @@ class EndToEndSmokeTests(unittest.TestCase):
     def test_checkpoint_round_trip_for_representative_models(self) -> None:
         configs = [
             (
-                PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised"),
+                PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct"),
                 self._point_dm(),
             ),
             (
-                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, backbone="pointnet", behavior="supervised"),
+                PointCloudTaskModel(num_classes=23, hidden_dim=32, depth=2, backbone="pointnet", behavior="direct"),
                 self._point_dm(),
             ),
             (
@@ -93,7 +93,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 self._point_dm(),
             ),
             (
-                RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", behavior="supervised"),
+                RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", behavior="direct"),
                 self._range_dm(),
             ),
             (
@@ -107,9 +107,9 @@ class EndToEndSmokeTests(unittest.TestCase):
             self.assertIsInstance(loaded, model.__class__)
 
     def test_render_smoke_for_point_and_range_models(self) -> None:
-        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
         point_ckpt = _fit_and_save(point_model, self._point_dm(), self.base_dir / "render_point")
-        range_model = RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", behavior="supervised")
+        range_model = RangeImageTaskModel(num_classes=23, base_channels=4, depth=2, backbone="unet", behavior="direct")
         range_ckpt = _fit_and_save(range_model, self._range_dm(), self.base_dir / "render_range")
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -118,7 +118,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 argparse.Namespace(
                     command="render",
                     representation="point_clouds",
-                    behavior="supervised",
+                    behavior="direct",
                     backbone="handcrafted",
                     checkpoint=point_ckpt,
                     point_data_dir=self.point_root,
@@ -141,7 +141,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 argparse.Namespace(
                     command="render",
                     representation="range_images",
-                    behavior="supervised",
+                    behavior="direct",
                     backbone="unet",
                     checkpoint=range_ckpt,
                     point_data_dir=self.point_root,
@@ -163,7 +163,7 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertEqual(save_gif_mock.call_count, 2)
 
     def test_run_render_uses_shared_model_interface(self) -> None:
-        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
         point_ckpt = _fit_and_save(point_model, self._point_dm(), self.base_dir / "render_contract")
 
         calls: list[tuple[bool, bool]] = []
@@ -187,7 +187,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 argparse.Namespace(
                     command="render",
                     representation="point_clouds",
-                    behavior="supervised",
+                    behavior="direct",
                     backbone="handcrafted",
                     checkpoint=point_ckpt,
                     point_data_dir=self.point_root,
@@ -210,7 +210,7 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertEqual(calls, [(True, False)])
 
     def test_run_render_limits_point_model_inputs_to_render_num_points(self) -> None:
-        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
+        point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
         point_ckpt = _fit_and_save(point_model, self._point_dm(), self.base_dir / "render_point_limit")
 
         observed_point_count: list[int] = []
@@ -235,7 +235,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 argparse.Namespace(
                     command="render",
                     representation="point_clouds",
-                    behavior="supervised",
+                    behavior="direct",
                     backbone="handcrafted",
                     checkpoint=point_ckpt,
                     point_data_dir=self.point_root,
@@ -259,7 +259,7 @@ class EndToEndSmokeTests(unittest.TestCase):
 
     def test_train_logs_final_wandb_artifacts_and_uses_checkpoint_reload(self) -> None:
         output_dir = self.base_dir / "train_outputs"
-        selection = get_model_selection("point_clouds", "handcrafted", "supervised")
+        selection = get_model_selection("point_clouds", "handcrafted", "direct")
         with (
             patch.object(selection.spec.module_cls, "load_from_checkpoint", wraps=selection.spec.module_cls.load_from_checkpoint) as load_mock,
             patch("src.main.WandbLogger", FakeWandbLogger),
@@ -269,7 +269,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 argparse.Namespace(
                     command="train",
                     representation="point_clouds",
-                    behavior="supervised",
+                    behavior="direct",
                     backbone="handcrafted",
                     point_data_dir=self.point_root,
                     range_data_dir=self.range_root,
@@ -329,7 +329,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 argparse.Namespace(
                     command="train",
                     representation="point_clouds",
-                    behavior="supervised",
+                    behavior="direct",
                     backbone="handcrafted",
                     point_data_dir=self.point_root,
                     range_data_dir=self.range_root,
@@ -374,7 +374,7 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertTrue(logger.experiment.finished)
 
     def test_evaluate_logs_requested_split_to_wandb(self) -> None:
-        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
+        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
         ckpt_path = _fit_and_save(model, self._point_dm(), self.base_dir / "eval_ckpt")
         output_dir = self.base_dir / "eval_report"
         with (
@@ -385,7 +385,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                 argparse.Namespace(
                     command="evaluate",
                     representation="point_clouds",
-                    behavior="supervised",
+                    behavior="direct",
                     backbone="handcrafted",
                     checkpoint=ckpt_path,
                     point_data_dir=self.point_root,
@@ -423,7 +423,7 @@ class EndToEndSmokeTests(unittest.TestCase):
         common_args = dict(
             command="train",
             representation="point_clouds",
-            behavior="supervised",
+            behavior="direct",
             backbone="handcrafted",
             point_data_dir=self.point_root,
             range_data_dir=self.range_root,

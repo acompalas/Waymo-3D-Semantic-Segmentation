@@ -268,7 +268,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
                 self.class_counts = torch.tensor(counts.astype(np.int64), dtype=torch.long)
                 self.class_weights = balanced_class_weights(counts, alpha=self.class_weight_alpha)
                 rank_zero_info(
-                    "Class counts (train supervised elements):\n"
+                    "Class counts (train direct elements):\n"
                     f"{_format_named_class_stats(self.class_counts, class_names=self.class_names, float_values=False)}"
                 )
                 if self.class_weight_alpha == 0.0:
