@@ -124,6 +124,24 @@ def _progress_segments(segments: Sequence[str], *, desc: str):
     return tqdm(values, desc=desc, leave=False, unit="segment")
 
 
+def _sum_frame_class_counts(
+    class_counts: np.ndarray,
+    frame_indices: Sequence[int],
+    num_classes: int,
+) -> np.ndarray:
+    counts = np.zeros(int(num_classes), dtype=np.int64)
+    if not frame_indices:
+        return counts
+    frame_sel = np.asarray(frame_indices, dtype=np.int64)
+    selected = np.asarray(class_counts[frame_sel], dtype=np.int64)
+    if selected.ndim != 3:
+        raise ValueError(f"Expected class_counts shape [num_frames, num_returns, num_classes], got {selected.shape}")
+    usable = min(int(num_classes), int(selected.shape[-1]))
+    if usable > 0:
+        counts[:usable] = selected[:, :, :usable].sum(axis=(0, 1), dtype=np.int64)
+    return counts
+
+
 class _BasePreprocessedDataset(Dataset[dict[str, Any]]):
     def __init__(
         self,
@@ -187,6 +205,7 @@ class _RangeSegmentCacheEntry:
     ri2: np.ndarray
     seg1: Optional[np.ndarray]
     seg2: Optional[np.ndarray]
+    class_counts: np.ndarray
 
 
 class PreprocessedRangeImageDataset(_BasePreprocessedDataset):
@@ -219,6 +238,7 @@ class PreprocessedRangeImageDataset(_BasePreprocessedDataset):
             ri2=np.load(segment_dir / "ri2.npy", mmap_mode="r"),
             seg1=np.load(segment_dir / "seg1.npy", mmap_mode="r") if (segment_dir / "seg1.npy").exists() else None,
             seg2=np.load(segment_dir / "seg2.npy", mmap_mode="r") if (segment_dir / "seg2.npy").exists() else None,
+            class_counts=np.load(segment_dir / "class_counts.npy", mmap_mode="r"),
         )
         self._cache[segment] = entry
         while len(self._cache) > self.max_cached_segments:
@@ -249,6 +269,7 @@ class PreprocessedRangeImageDataset(_BasePreprocessedDataset):
             "valid_geometry": valid_geometry,
             "valid_label": valid_label,
             "is_in_nlz": is_in_nlz,
+            "class_counts": entry.class_counts[frame_idx].astype(np.int64, copy=False),
             "segment_context_name": str(segment),
             "frame_timestamp_micros": int(timestamp),
         }
@@ -271,21 +292,8 @@ class PreprocessedRangeImageDataset(_BasePreprocessedDataset):
         counts = np.zeros(int(num_classes), dtype=np.int64)
         for segment in _progress_segments(self.segment_names, desc="Counting range-image class labels"):
             entry = self._load_segment(segment)
-            if entry.seg1 is None or entry.seg2 is None:
-                continue
-
-            sem1 = entry.seg1[:, :, :, 1].astype(np.int64, copy=False)
-            sem2 = entry.seg2[:, :, :, 1].astype(np.int64, copy=False)
-            valid1 = (entry.ri1[:, :, :, 0] > 0.0) & (entry.ri1[:, :, :, 3] <= 0.0) & (sem1 > 0)
-            valid2 = (entry.ri2[:, :, :, 0] > 0.0) & (entry.ri2[:, :, :, 3] <= 0.0) & (sem2 > 0)
-
-            for classes in (sem1[valid1], sem2[valid2]):
-                if classes.size == 0:
-                    continue
-                classes = classes[(classes >= 0) & (classes < int(num_classes))]
-                if classes.size == 0:
-                    continue
-                counts += np.bincount(classes, minlength=int(num_classes))[: int(num_classes)]
+            frame_indices = [frame_idx for frame_idx, _ in self.frames_for_segment(segment)]
+            counts += _sum_frame_class_counts(entry.class_counts, frame_indices, int(num_classes))
         return counts
 
 
@@ -296,6 +304,7 @@ class _PointSegmentCacheEntry:
     semantic: np.ndarray
     valid_geometry: np.ndarray
     valid_label: np.ndarray
+    class_counts: np.ndarray
 
 
 class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
@@ -337,6 +346,7 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
             semantic=np.load(segment_dir / "semantic.npy", mmap_mode="r"),
             valid_geometry=np.load(segment_dir / "valid_geometry.npy", mmap_mode="r"),
             valid_label=np.load(segment_dir / "valid_label.npy", mmap_mode="r"),
+            class_counts=np.load(segment_dir / "class_counts.npy", mmap_mode="r"),
         )
         self._cache[segment] = entry
         while len(self._cache) > self.max_cached_segments:
@@ -352,6 +362,7 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
             "labels": entry.semantic[frame_idx].astype(np.int64, copy=False),
             "valid_geometry": entry.valid_geometry[frame_idx].astype(bool, copy=False),
             "valid_label": entry.valid_label[frame_idx].astype(bool, copy=False),
+            "class_counts": entry.class_counts[frame_idx].astype(np.int64, copy=False),
             "segment_context_name": str(segment),
             "frame_timestamp_micros": int(timestamp),
         }
@@ -463,16 +474,5 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
         for segment in _progress_segments(self.segment_names, desc="Counting point-cloud class labels"):
             entry = self._load_segment(segment)
             frame_indices = [frame_idx for frame_idx, _ in self.frames_for_segment(segment)]
-            if not frame_indices:
-                continue
-            frame_sel = np.asarray(frame_indices, dtype=np.int64)
-            sem = entry.semantic[frame_sel].reshape(-1).astype(np.int64, copy=False)
-            valid_label = entry.valid_label[frame_sel].reshape(-1).astype(bool, copy=False)
-            classes = sem[valid_label]
-            if classes.size == 0:
-                continue
-            classes = classes[(classes >= 0) & (classes < int(num_classes))]
-            if classes.size == 0:
-                continue
-            counts += np.bincount(classes, minlength=int(num_classes))[: int(num_classes)]
+            counts += _sum_frame_class_counts(entry.class_counts, frame_indices, int(num_classes))
         return counts

@@ -61,6 +61,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Preprocess Waymo LiDAR range-image artifacts.")
     p.add_argument("--data-dir", type=Path, default=Path("waymo_open_dataset_v_2_0_1"))
     p.add_argument("--output-dir", type=Path, default=Path("preprocessed/range_images"))
+    p.add_argument(
+        "--proto-path",
+        type=Path,
+        default=None,
+        help="Optional segmentation proto path. Defaults to <data-dir>/segmentation.proto.",
+    )
     p.add_argument("--laser-id", type=int, default=1)
     p.add_argument(
         "--labeled-subdirs",
@@ -117,6 +123,22 @@ def parse_classes(proto_path: Path) -> dict[str, str]:
         raise ValueError(f"No class definitions parsed from {proto_path}")
     # Keep insertion order sorted numerically by class id.
     return {str(k): classes[k] for k in sorted(classes)}
+
+
+def _resolve_proto_path(data_dir: Path, proto_path: Optional[Path]) -> Path:
+    return Path(proto_path) if proto_path is not None else data_dir / "segmentation.proto"
+
+
+def _class_count_vector(semantic: np.ndarray, valid_label: np.ndarray, num_classes: int) -> np.ndarray:
+    counts = np.zeros(int(num_classes), dtype=np.int64)
+    classes = semantic[valid_label]
+    if classes.size == 0:
+        return counts
+    classes = classes[(classes >= 0) & (classes < int(num_classes))]
+    if classes.size == 0:
+        return counts
+    counts[:] = np.bincount(classes.astype(np.int64, copy=False), minlength=int(num_classes))[: int(num_classes)]
+    return counts
 
 
 def _map_segment_files(directory: Path) -> dict[str, Path]:
@@ -254,6 +276,7 @@ def _save_segment(
     inclinations: np.ndarray,
     azimuths: np.ndarray,
     timestamps: np.ndarray,
+    class_counts: np.ndarray,
 ) -> None:
     segment_dir = segments_root / segment
     segment_dir.mkdir(parents=True, exist_ok=False)
@@ -269,6 +292,7 @@ def _save_segment(
     np.save(segment_dir / "inclinations.npy", inclinations)
     np.save(segment_dir / "azimuths.npy", azimuths)
     np.save(segment_dir / "timestamps.npy", timestamps)
+    np.save(segment_dir / "class_counts.npy", class_counts)
 
 
 def _build_root_meta(data_dir: Path, laser_id: int) -> dict[str, Any]:
@@ -298,6 +322,11 @@ def _build_root_meta(data_dir: Path, laser_id: int) -> dict[str, Any]:
                 "dtype": "int32",
                 "shape": ["num_frames", "height", "width", "channel"],
                 "channels": ["instance_id", "semantic_class"],
+            },
+            "class_counts": {
+                "dtype": "int64",
+                "shape": ["num_frames", "num_returns", "num_classes"],
+                "notes": "Per-frame semantic counts using valid_label = (range > 0) & (is_in_nlz <= 0) & (semantic_class > 0).",
             },
             "extrinsic": {"dtype": "float32", "shape": [4, 4]},
             "inclinations": {"dtype": "float32", "shape": ["height"]},
@@ -359,6 +388,7 @@ def _process_segment_worker(
     calib_path: Path,
     laser_id: int,
     is_labeled: bool,
+    num_classes: int,
 ) -> tuple[str, int]:
     if is_labeled:
         if seg_path is None:
@@ -433,19 +463,31 @@ def _process_segment_worker(
     if frame_hw is None:
         raise ValueError(f"No frames available for segment '{segment}'")
     h, w = frame_hw
+    ri1_arr = np.stack(ri1_frames, axis=0)
+    ri2_arr = np.stack(ri2_frames, axis=0)
     seg1_arr = np.stack(seg1_frames, axis=0) if is_labeled else None
     seg2_arr = np.stack(seg2_frames, axis=0) if is_labeled else None
+    class_counts = np.zeros((len(timestamps), 2, int(num_classes)), dtype=np.int64)
+    if seg1_arr is not None and seg2_arr is not None:
+        sem1 = seg1_arr[:, :, :, 1].astype(np.int64, copy=False)
+        sem2 = seg2_arr[:, :, :, 1].astype(np.int64, copy=False)
+        valid1 = (ri1_arr[:, :, :, 0] > 0.0) & (ri1_arr[:, :, :, 3] <= 0.0) & (sem1 > 0)
+        valid2 = (ri2_arr[:, :, :, 0] > 0.0) & (ri2_arr[:, :, :, 3] <= 0.0) & (sem2 > 0)
+        for frame_idx in range(len(timestamps)):
+            class_counts[frame_idx, 0] = _class_count_vector(sem1[frame_idx], valid1[frame_idx], int(num_classes))
+            class_counts[frame_idx, 1] = _class_count_vector(sem2[frame_idx], valid2[frame_idx], int(num_classes))
     _save_segment(
         segments_root=segments_root,
         segment=segment,
-        ri1=np.stack(ri1_frames, axis=0),
-        ri2=np.stack(ri2_frames, axis=0),
+        ri1=ri1_arr,
+        ri2=ri2_arr,
         seg1=seg1_arr,
         seg2=seg2_arr,
         extrinsic=extrinsic,
         inclinations=_beam_inclinations(calib_row, h),
         azimuths=_beam_azimuths(w),
         timestamps=np.asarray(timestamps, dtype=np.int64),
+        class_counts=class_counts,
     )
     return segment, len(timestamps)
 
@@ -456,6 +498,7 @@ def _process_segments(
     labeled_source_segments: dict[str, list[str]],
     unlabeled_source_segments: dict[str, list[str]],
     laser_id: int,
+    num_classes: int,
     num_workers: int,
     show_progress: bool,
 ) -> None:
@@ -498,6 +541,7 @@ def _process_segments(
                     calib_path=calib_path,
                     laser_id=laser_id,
                     is_labeled=is_labeled,
+                    num_classes=num_classes,
                 )
                 progress.update(1)
         finally:
@@ -518,6 +562,7 @@ def _process_segments(
                     calib_path,
                     laser_id,
                     is_labeled,
+                    num_classes,
                 )
                 for segment, lidar_path, seg_path, calib_path, is_labeled in tasks
             ]
@@ -540,10 +585,11 @@ def main() -> None:
         labeled_subdirs=labeled_subdirs,
         unlabeled_subdirs=unlabeled_subdirs,
     )
-    proto_path = data_dir / "segmentation.proto"
+    proto_path = _resolve_proto_path(data_dir, args.proto_path)
     unlabeled_subdir_set = set(unlabeled_subdirs)
 
     classes = parse_classes(proto_path)
+    num_classes = max(int(key) for key in classes) + 1
     segment_source_records: list[dict[str, Any]] = []
     labeled_source_segments: dict[str, list[str]] = {}
     unlabeled_source_segments: dict[str, list[str]] = {}
@@ -590,6 +636,7 @@ def main() -> None:
         labeled_source_segments=labeled_source_segments,
         unlabeled_source_segments=unlabeled_source_segments,
         laser_id=laser_id,
+        num_classes=num_classes,
         num_workers=int(args.num_workers),
         show_progress=not bool(args.no_progress),
     )

@@ -103,7 +103,7 @@ def build_synthetic_preprocessed_roots(base_dir: Path) -> tuple[Path, Path]:
     _write_json(point_root / "segment_source.json", records)
 
     for root in (range_root, point_root):
-        _write_json(root / "classes.json", {"0": "undefined", "1": "car", "2": "pedestrian"})
+        _write_json(root / "classes.json", {"0": "undefined", "1": "car", "2": "pedestrian", "3": "cyclist"})
 
     for idx, segment in enumerate(("segment_train", "segment_val")):
         label_offset = idx + 1
@@ -150,12 +150,18 @@ def _build_range_segment(segment_dir: Path, *, timestamp: int, label_offset: int
         ],
         dtype=np.int16,
     )
+    class_counts = np.zeros((1, 2, 4), dtype=np.int64)
+    valid1 = (base[0, :, :, 0] > 0.0) & (base[0, :, :, 3] <= 0.0) & (seg[0, :, :, 1] > 0)
+    valid2 = (ri2[0, :, :, 0] > 0.0) & (ri2[0, :, :, 3] <= 0.0) & (seg[0, :, :, 1] > 0)
+    class_counts[0, 0] = np.bincount(seg[0, :, :, 1][valid1], minlength=4)[:4]
+    class_counts[0, 1] = np.bincount(seg[0, :, :, 1][valid2], minlength=4)[:4]
 
     np.save(segment_dir / "ri1.npy", base)
     np.save(segment_dir / "ri2.npy", ri2)
     np.save(segment_dir / "seg1.npy", seg)
     np.save(segment_dir / "seg2.npy", seg)
     np.save(segment_dir / "timestamps.npy", np.array([timestamp], dtype=np.int64))
+    np.save(segment_dir / "class_counts.npy", class_counts)
 
 
 def _build_point_segment(segment_dir: Path, *, timestamp: int, label_offset: int) -> None:
@@ -175,6 +181,9 @@ def _build_point_segment(segment_dir: Path, *, timestamp: int, label_offset: int
                 valid_geometry[0, ret, y, x] = not (y == 1 and x == 0)
                 semantic[0, ret, y, x] = label_offset if (x + y + ret) % 3 else label_offset + 1
                 valid_label[0, ret, y, x] = valid_geometry[0, ret, y, x] and semantic[0, ret, y, x] > 0 and not (y == 1 and x == 3)
+    class_counts = np.zeros((1, 2, 4), dtype=np.int64)
+    for ret in range(2):
+        class_counts[0, ret] = np.bincount(semantic[0, ret][valid_label[0, ret]], minlength=4)[:4]
 
     np.save(segment_dir / "xyz.npy", xyz)
     np.save(segment_dir / "feat.npy", feat)
@@ -182,3 +191,4 @@ def _build_point_segment(segment_dir: Path, *, timestamp: int, label_offset: int
     np.save(segment_dir / "valid_geometry.npy", valid_geometry)
     np.save(segment_dir / "valid_label.npy", valid_label)
     np.save(segment_dir / "timestamps.npy", np.array([timestamp], dtype=np.int64))
+    np.save(segment_dir / "class_counts.npy", class_counts)

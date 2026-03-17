@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 import lightning as L
+from lightning.pytorch.utilities.rank_zero import rank_zero_info
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -31,6 +32,38 @@ def balanced_class_weights(counts: np.ndarray) -> torch.Tensor:
     if num_classes > 0:
         weights[0] = 0.0
     return torch.tensor(weights.astype(np.float32))
+
+
+def _format_named_class_stats(
+    values: np.ndarray | torch.Tensor,
+    *,
+    class_names: Sequence[str],
+    float_values: bool,
+) -> str:
+    data = np.asarray(values.detach().cpu() if isinstance(values, torch.Tensor) else values)
+    if data.ndim != 1:
+        raise ValueError(f"Expected 1D class stats, got shape {data.shape}")
+
+    lines: list[str] = []
+    if float_values:
+        active = [(idx, float(data[idx])) for idx in range(data.shape[0]) if abs(float(data[idx])) > 0.0]
+        if not active:
+            return "  none"
+        for idx, value in active:
+            name = class_names[idx] if idx < len(class_names) else f"class_{idx}"
+            lines.append(f"  [{idx}] {name}: {value:.3f}")
+        return "\n".join(lines)
+
+    active = [(idx, int(data[idx])) for idx in range(data.shape[0]) if int(data[idx]) > 0]
+    total = sum(value for _, value in active)
+    lines.append(f"  total: {total}")
+    if not active:
+        lines.append("  none")
+        return "\n".join(lines)
+    for idx, value in active:
+        name = class_names[idx] if idx < len(class_names) else f"class_{idx}"
+        lines.append(f"  [{idx}] {name}: {value}")
+    return "\n".join(lines)
 
 
 class WaymoLidarDataModule(L.LightningDataModule):
@@ -224,6 +257,19 @@ class WaymoLidarDataModule(L.LightningDataModule):
                 counts = self.train_dataset.compute_class_counts(self.num_classes)
                 self.class_counts = torch.tensor(counts.astype(np.int64), dtype=torch.long)
                 self.class_weights = balanced_class_weights(counts) if self.balanced_weights else None
+                rank_zero_info(
+                    "Class counts (train supervised elements):\n"
+                    f"{_format_named_class_stats(self.class_counts, class_names=self.class_names, float_values=False)}"
+                )
+                if not self.balanced_weights:
+                    rank_zero_info("Balanced class weights: disabled")
+                elif self.class_weights is not None:
+                    rank_zero_info(
+                        "Class weights:\n"
+                        f"{_format_named_class_stats(self.class_weights, class_names=self.class_names, float_values=True)}"
+                    )
+                else:
+                    rank_zero_info("Class weights: unavailable (not computed by datamodule).")
 
         if stage in (None, "test"):
             self.test_dataset = None

@@ -252,7 +252,7 @@ Script: `data_pipeline/preprocess_range_images.py`
 Purpose:
 
 - reads raw Waymo source subdirectories
-- writes preprocessed range-image segments with calibration, timestamps, and optional segmentation labels
+- writes preprocessed range-image segments with calibration, timestamps, optional segmentation labels, and per-frame class counts
 
 Arguments:
 
@@ -260,6 +260,7 @@ Arguments:
 | --- | --- | --- |
 | `--data-dir` | raw Waymo dataset root | `waymo_open_dataset_v_2_0_1` |
 | `--output-dir` | preprocessed range-image output root | `preprocessed/range_images` |
+| `--proto-path` | optional path to the segmentation proto used to build `classes.json`; if omitted, uses `<data-dir>/segmentation.proto` | `None` |
 | `--laser-id` | Waymo laser id to preprocess | `1` |
 | `--labeled-subdirs` | source subdirs treated as labeled | `training validation` |
 | `--unlabeled-subdirs` | source subdirs treated as unlabeled | empty |
@@ -283,7 +284,7 @@ Script: `data_pipeline/preprocess_point_clouds.py`
 Purpose:
 
 - reads preprocessed range-image segments
-- writes dense point-cloud tensors with explicit geometry and supervision masks
+- writes dense point-cloud tensors with explicit geometry, supervision masks, and copied per-frame class counts
 
 Arguments:
 
@@ -310,6 +311,7 @@ python data_pipeline/preprocess_point_clouds.py \
 - if `--data-dir` is omitted, the CLI uses:
   - `data/preprocessed/point_clouds` for `point_clouds`
   - `data/preprocessed/range_images` for `range_images`
+- preprocessing stores per-frame class counts in both representations so datasets can read frame-level counts directly and aggregate class totals without rescanning labels
 - `--val-samples-per-segment` controls deterministic validation subsampling
 - when omitted, validation defaults are:
   - supervised: full validation set

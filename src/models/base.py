@@ -1,7 +1,6 @@
 from typing import Any, Optional
 
 import lightning as L
-from lightning.pytorch.utilities.rank_zero import rank_zero_info
 import numpy as np
 import torch
 
@@ -16,24 +15,6 @@ SEGMENTED_POINTCLOUD_KEYS = {
     "true_labels",
     "valid_label",
 }
-
-
-def _format_class_summary(values: torch.Tensor, *, float_values: bool) -> str:
-    data = values.detach().cpu()
-    if data.numel() == 0:
-        return "none"
-    if float_values:
-        active = [(idx, float(value.item())) for idx, value in enumerate(data) if abs(float(value.item())) > 0.0]
-        if not active:
-            return "none"
-        return ", ".join(f"{idx}:{value:.3f}" for idx, value in active)
-
-    active = [(idx, int(value.item())) for idx, value in enumerate(data) if int(value.item()) > 0]
-    if not active:
-        return "none"
-    total = sum(value for _, value in active)
-    items = ", ".join(f"{idx}:{value}" for idx, value in active)
-    return f"total={total} | {items}"
 
 
 class SegmentationLightningModule(L.LightningModule):
@@ -182,19 +163,9 @@ class SegmentationLightningModule(L.LightningModule):
 
     def on_fit_start(self) -> None:
         dm = self.trainer.datamodule
-        counts = getattr(dm, "class_counts", None) if dm is not None else None
         weights = getattr(dm, "class_weights", None) if dm is not None else None
-
-        if counts is not None:
-            rank_zero_info(f"Class counts (train supervised elements): {_format_class_summary(counts, float_values=False)}")
-
-        if not self._use_balanced_class_weights:
-            rank_zero_info("Balanced class weights: disabled")
-        elif weights is not None:
+        if self._use_balanced_class_weights and weights is not None:
             self.set_class_weights(weights.to(self.device))
-            rank_zero_info(f"Class weights: {_format_class_summary(weights, float_values=True)}")
-        else:
-            rank_zero_info("Class weights: unavailable (not computed by datamodule).")
         class_names = getattr(dm, "class_names", None) if dm is not None else None
         if class_names is not None:
             self.set_class_names(list(class_names))

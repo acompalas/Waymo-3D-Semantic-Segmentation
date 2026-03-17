@@ -105,6 +105,11 @@ def _build_output_meta(input_meta: dict[str, Any], range_dir: Path) -> dict[str,
                 "dtype": "bool",
                 "shape": ["num_frames", "num_returns", "height", "width"],
             },
+            "class_counts": {
+                "dtype": "int64",
+                "shape": ["num_frames", "num_returns", "num_classes"],
+                "notes": "Per-frame semantic counts copied from the source range-image artifacts using the valid_label mask.",
+            },
             "timestamps": {"dtype": "int64", "shape": ["num_frames"]},
         },
     }
@@ -159,6 +164,7 @@ def _process_segment_worker(
     inclinations = np.load(in_dir / "inclinations.npy")
     azimuths = np.load(in_dir / "azimuths.npy")
     extrinsic = np.load(in_dir / "extrinsic.npy")
+    class_counts = np.load(in_dir / "class_counts.npy")
 
     if ri1.ndim != 4 or ri1.shape[-1] != 4:
         raise ValueError(f"Unexpected ri1 shape for segment '{segment}': {ri1.shape}")
@@ -199,6 +205,10 @@ def _process_segment_worker(
                     f"Segmentation spatial/temporal shape mismatch for segment '{segment}': "
                     f"{seg1.shape[:3]} vs {ri1.shape[:3]}"
                 )
+    if class_counts.shape[:2] != (num_frames, 2):
+        raise ValueError(
+            f"class_counts shape mismatch for segment '{segment}': expected leading shape {(num_frames, 2)}, got {class_counts.shape}"
+        )
 
     out_dir = out_segments_root / segment
     out_dir.mkdir(parents=True, exist_ok=False)
@@ -246,6 +256,7 @@ def _process_segment_worker(
     valid_geometry.flush()
     valid_label.flush()
     np.save(out_dir / "timestamps.npy", timestamps.astype(np.int64, copy=False))
+    np.save(out_dir / "class_counts.npy", class_counts.astype(np.int64, copy=False))
     return segment, int(num_frames)
 
 
