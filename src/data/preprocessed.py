@@ -324,6 +324,7 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
         self.seed = int(seed)
         self.deterministic_sampling = bool(deterministic_sampling)
         self._cache: OrderedDict[str, _PointSegmentCacheEntry] = OrderedDict()
+        self._replacement_warning_emitted = False
         super().__init__(
             path=path,
             source_subdirs=source_subdirs,
@@ -331,7 +332,6 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
             max_cached_segments=max_cached_segments,
             seed=seed,
         )
-        self._filter_frames_with_min_geometry()
 
     def _load_segment(self, segment: str) -> _PointSegmentCacheEntry:
         if segment in self._cache:
@@ -367,31 +367,6 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
             "frame_timestamp_micros": int(timestamp),
         }
 
-    def _filter_frames_with_min_geometry(self) -> None:
-        kept_frames: list[tuple[str, int, int]] = []
-        dropped = 0
-        for segment in self.segment_names:
-            entry = self._load_segment(segment)
-            valid_counts = entry.valid_geometry.reshape(entry.valid_geometry.shape[0], -1).sum(axis=1)
-            for frame_idx, timestamp in self.frames_for_segment(segment):
-                if int(valid_counts[frame_idx]) >= self.num_points:
-                    kept_frames.append((segment, frame_idx, timestamp))
-                else:
-                    dropped += 1
-
-        if not kept_frames:
-            raise ValueError(
-                f"No point-cloud frames under {self.path} contain at least {self.num_points} valid geometry points."
-            )
-
-        if dropped > 0:
-            warnings.warn(
-                f"Dropping {dropped} point-cloud frames with fewer than {self.num_points} valid geometry points.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        self._set_frames(kept_frames)
-
     def _sample_points(
         self,
         points: np.ndarray,
@@ -402,13 +377,31 @@ class PreprocessedPointCloudDataset(_BasePreprocessedDataset):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         target = self.num_points
         count = points.shape[0]
-        if count < target:
+        if count <= 0:
             raise RuntimeError(
-                f"Frame has only {count} valid geometry points, fewer than required num_points={target}."
+                "Frame has no valid geometry points, so it cannot be sampled."
             )
 
         preferred = np.flatnonzero(valid_label)
-        if preferred.size >= target:
+        if count < target:
+            if not self._replacement_warning_emitted:
+                warnings.warn(
+                    (
+                        f"Encountered point-cloud frame(s) with fewer than num_points={target} valid geometry points; "
+                        "sampling with replacement for sparse frames."
+                    ),
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self._replacement_warning_emitted = True
+
+            if preferred.size == count:
+                idx = rng.choice(count, size=target, replace=True)
+            else:
+                supplement = rng.choice(count, size=target - preferred.size, replace=True)
+                idx = np.concatenate([preferred.astype(np.int64, copy=False), supplement.astype(np.int64, copy=False)])
+                idx = rng.permutation(idx)
+        elif preferred.size >= target:
             idx = rng.choice(preferred, size=target, replace=False)
         elif preferred.size == count:
             idx = rng.choice(count, size=target, replace=False)
