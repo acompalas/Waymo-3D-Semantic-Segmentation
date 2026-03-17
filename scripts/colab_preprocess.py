@@ -14,6 +14,7 @@ Run this from a Colab notebook with `%run`:
 """
 
 import argparse
+import importlib
 import os
 from pathlib import Path
 import shlex
@@ -67,6 +68,21 @@ def try_command(cmd: list[str], *, cwd: Path | None = None) -> subprocess.Comple
         capture_output=True,
         text=True,
     )
+
+
+def run_module_main(module_name: str, argv: list[str]) -> None:
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+    module = importlib.import_module(module_name)
+    module = importlib.reload(module)
+
+    old_argv = sys.argv[:]
+    try:
+        sys.argv = [module_name, *argv]
+        module.main()
+    finally:
+        sys.argv = old_argv
 
 
 def ensure_drive_mount() -> None:
@@ -169,10 +185,7 @@ def preprocess_range_images(
     progress_style: str,
     overwrite: bool,
 ) -> None:
-    cmd = [
-        sys.executable,
-        "-u",
-        str(REPO_ROOT / "data_pipeline" / "preprocess_range_images.py"),
+    argv = [
         "--data-dir",
         str(raw_data_dir),
         "--output-dir",
@@ -185,8 +198,13 @@ def preprocess_range_images(
         str(progress_style),
     ]
     if overwrite:
-        cmd.append("--overwrite")
-    run_command(cmd, cwd=REPO_ROOT)
+        argv.append("--overwrite")
+
+    print(
+        "\n$ python -m data_pipeline.preprocess_range_images "
+        + " ".join(shlex.quote(part) for part in argv)
+    )
+    run_module_main("data_pipeline.preprocess_range_images", argv)
 
 
 def preprocess_point_clouds(
@@ -196,10 +214,7 @@ def preprocess_point_clouds(
     progress_style: str,
     overwrite: bool,
 ) -> None:
-    cmd = [
-        sys.executable,
-        "-u",
-        str(REPO_ROOT / "data_pipeline" / "preprocess_point_clouds.py"),
+    argv = [
         "--range-dir",
         str(range_dir),
         "--output-dir",
@@ -210,8 +225,13 @@ def preprocess_point_clouds(
         str(progress_style),
     ]
     if overwrite:
-        cmd.append("--overwrite")
-    run_command(cmd, cwd=REPO_ROOT)
+        argv.append("--overwrite")
+
+    print(
+        "\n$ python -m data_pipeline.preprocess_point_clouds "
+        + " ".join(shlex.quote(part) for part in argv)
+    )
+    run_module_main("data_pipeline.preprocess_point_clouds", argv)
 
 
 def main() -> None:
