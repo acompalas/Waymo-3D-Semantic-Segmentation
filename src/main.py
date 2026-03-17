@@ -38,6 +38,7 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--worker-start-method", type=str, default="spawn")
     parser.add_argument("--max-epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--no-balanced-class-weights", action="store_true")
     parser.add_argument("--early-stopping-patience", type=int, default=2)
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.0)

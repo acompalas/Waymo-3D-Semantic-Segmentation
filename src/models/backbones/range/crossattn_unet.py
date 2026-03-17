@@ -10,7 +10,6 @@ from .common import Downsample, LiDARConditionEncoder, ResBlock, SpatialTransfor
 def add_range_crossattn_backbone_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
 
 
 class RangeDiffusionBackbone(nn.Module):

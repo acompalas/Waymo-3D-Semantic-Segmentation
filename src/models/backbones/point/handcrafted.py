@@ -13,7 +13,6 @@ def add_handcrafted_backbone_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--proj-dim", type=int, default=0)
     parser.add_argument("--proj-depth", type=int, default=0)
     parser.add_argument("--proj-dropout", type=float, default=0.0)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
 
 
 class HandcraftedPointBackbone(nn.Module):

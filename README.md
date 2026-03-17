@@ -120,6 +120,7 @@ These are required for every command.
 | `--worker-start-method` | multiprocessing start method | `"spawn"` |
 | `--max-epochs` | training epochs | `20` |
 | `--lr` | learning rate | `1e-3` |
+| `--weight-decay` | optimizer weight decay | `1e-4` |
 | `--no-balanced-class-weights` | disable balanced class weighting | `False` |
 | `--early-stopping-patience` | early stopping patience in epochs | `2` |
 | `--early-stopping-min-delta` | minimum improvement for early stopping | `0.0` |
@@ -198,7 +199,6 @@ These arguments are only added to the `train` CLI when the chosen backbone decla
 | `--hidden-dim` | backbone hidden width | `256` |
 | `--depth` | number of residual MLP blocks | `6` |
 | `--dropout` | dropout inside residual MLP blocks | `0.1` |
-| `--weight-decay` | optimizer weight decay | `1e-4` |
 
 ### `edgeconv`
 
@@ -208,7 +208,6 @@ These arguments are only added to the `train` CLI when the chosen backbone decla
 | `--depth` | number of EdgeConv blocks | `6` |
 | `--dropout` | dropout inside blocks | `0.1` |
 | `--knn-k` | KNN neighborhood size | `16` |
-| `--weight-decay` | optimizer weight decay | `1e-4` |
 
 ### `pointnetplusplus`
 
@@ -227,7 +226,6 @@ These arguments are only added to the `train` CLI when the chosen backbone decla
 | `--proj-dim` | width of optional learned post-MLP adapter | `0` |
 | `--proj-depth` | depth of optional learned post-MLP adapter; `0` disables it | `0` |
 | `--proj-dropout` | dropout in the optional post-MLP adapter | `0.0` |
-| `--weight-decay` | optimizer weight decay | `1e-4` |
 
 ### `unet`
 
@@ -236,7 +234,6 @@ These arguments are only added to the `train` CLI when the chosen backbone decla
 | `--base-channels` | base UNet channel width | `32` |
 | `--depth` | number of encoder levels | `4` |
 | `--dropout` | ConvBlock dropout | `0.0` |
-| `--weight-decay` | optimizer weight decay | `1e-4` |
 
 ### `crossattn_unet`
 
@@ -244,7 +241,6 @@ These arguments are only added to the `train` CLI when the chosen backbone decla
 | --- | --- | --- |
 | `--base-channels` | base channel width | `32` |
 | `--dropout` | residual block dropout | `0.1` |
-| `--weight-decay` | optimizer weight decay | `1e-4` |
 
 ## Preprocessing Pipeline
 

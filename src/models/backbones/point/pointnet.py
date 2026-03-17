@@ -10,7 +10,6 @@ def add_pointnet_backbone_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--depth", type=int, default=6)
     parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
 
 
 class PointNetBackbone(nn.Module):

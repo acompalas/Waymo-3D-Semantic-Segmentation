@@ -26,6 +26,8 @@ class RegistryCliTests(unittest.TestCase):
                 "--val-samples-per-segment",
                 "3",
                 "--geometry-only",
+                "--weight-decay",
+                "0.01",
                 "--no-auto-evaluate",
             ]
         )
@@ -37,6 +39,7 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(args.proj_depth, 2)
         self.assertEqual(args.val_samples_per_segment, 3)
         self.assertEqual(args.log_pointcloud_count, 4)
+        self.assertEqual(args.weight_decay, 0.01)
         self.assertTrue(args.geometry_only)
 
     def test_point_diffusion_parser_adds_behavior_args(self) -> None:

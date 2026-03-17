@@ -11,7 +11,6 @@ def add_range_unet_backbone_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--depth", type=int, default=4)
     parser.add_argument("--dropout", type=float, default=0.0)
-    parser.add_argument("--weight-decay", type=float, default=1e-4)
 
 
 class RangeUNetBackbone(nn.Module):
