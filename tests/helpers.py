@@ -92,15 +92,22 @@ class FakeWandbModule:
         }
 
 
-def build_synthetic_preprocessed_roots(base_dir: Path) -> tuple[Path, Path]:
+def build_synthetic_preprocessed_roots(
+    base_dir: Path,
+    *,
+    num_train_segments: int = 1,
+    num_validation_segments: int = 1,
+) -> tuple[Path, Path]:
     range_root = base_dir / "range_images"
     point_root = base_dir / "point_clouds"
     _write_json(range_root / "meta.json", {"representation": "range_images"})
     _write_json(point_root / "meta.json", {"representation": "point_clouds_dense"})
 
+    train_segments = ["segment_train"] if num_train_segments == 1 else [f"segment_train_{idx}" for idx in range(num_train_segments)]
+    val_segments = ["segment_val"] if num_validation_segments == 1 else [f"segment_val_{idx}" for idx in range(num_validation_segments)]
     records = [
-        {"source_subdir": "training", "segments": ["segment_train"]},
-        {"source_subdir": "validation", "segments": ["segment_val"]},
+        {"source_subdir": "training", "segments": train_segments},
+        {"source_subdir": "validation", "segments": val_segments},
     ]
     _write_json(range_root / "segment_source.json", records)
     _write_json(point_root / "segment_source.json", records)
@@ -108,7 +115,8 @@ def build_synthetic_preprocessed_roots(base_dir: Path) -> tuple[Path, Path]:
     for root in (range_root, point_root):
         _write_json(root / "classes.json", {"0": "undefined", "1": "car", "2": "pedestrian", "3": "cyclist"})
 
-    for idx, segment in enumerate(("segment_train", "segment_val")):
+    all_segments = [("training", segment) for segment in train_segments] + [("validation", segment) for segment in val_segments]
+    for idx, (_source, segment) in enumerate(all_segments):
         label_offset = idx + 1
         _build_range_segment(range_root / "segments" / segment, timestamp=100 + idx, label_offset=label_offset)
         _build_point_segment(point_root / "segments" / segment, timestamp=100 + idx, label_offset=label_offset)

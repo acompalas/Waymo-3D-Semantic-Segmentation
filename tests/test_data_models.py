@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import torch
 
-from src.data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
+from src.data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule, source_segments_map
 from src.data.datamodule import balanced_class_weights
 from src.models.losses import focal_cross_entropy_loss
 from src.models import PointCloudTaskModel, RangeImageTaskModel
@@ -78,6 +78,85 @@ class DataAndModelTests(unittest.TestCase):
         dm.setup("fit")
         self.assertIsNotNone(dm.class_weights)
         self.assertEqual(dm.class_weights.shape[0], 23)
+
+    def test_empty_test_subdirs_derives_held_out_test_segments_from_train(self) -> None:
+        point_root, _ = build_synthetic_preprocessed_roots(self.base_dir / "derived_test", num_train_segments=4)
+        dm = WaymoLidarDataModule(
+            data_dir=point_root,
+            representation="point_clouds",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="",
+            val_fraction=0.25,
+            num_workers=0,
+            max_cached_segments=1,
+            seed=7,
+        )
+
+        dm.setup("fit")
+        dm.setup("test")
+
+        all_train_segments = set(source_segments_map(point_root)["training"])
+        train_segments = set(dm.train_dataset.segment_names)
+        test_segments = set(dm.test_dataset.segment_names)
+        self.assertEqual(train_segments | test_segments, all_train_segments)
+        self.assertTrue(train_segments.isdisjoint(test_segments))
+        self.assertEqual(set(dm.val_dataset.segment_names), {"segment_val"})
+
+    def test_empty_val_and_test_subdirs_split_train_three_ways(self) -> None:
+        point_root, _ = build_synthetic_preprocessed_roots(self.base_dir / "derived_val_and_test", num_train_segments=5)
+        dm = WaymoLidarDataModule(
+            data_dir=point_root,
+            representation="point_clouds",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="",
+            test_subdirs="",
+            val_fraction=0.2,
+            num_workers=0,
+            max_cached_segments=1,
+            seed=11,
+        )
+
+        dm.setup("fit")
+        dm.setup("test")
+
+        all_train_segments = set(source_segments_map(point_root)["training"])
+        train_segments = set(dm.train_dataset.segment_names)
+        val_segments = set(dm.val_dataset.segment_names)
+        test_segments = set(dm.test_dataset.segment_names)
+        self.assertEqual(train_segments | val_segments | test_segments, all_train_segments)
+        self.assertTrue(train_segments.isdisjoint(val_segments))
+        self.assertTrue(train_segments.isdisjoint(test_segments))
+        self.assertTrue(val_segments.isdisjoint(test_segments))
+
+    def test_test_stage_only_with_empty_test_subdirs_derives_test_without_val_holdout(self) -> None:
+        point_root, _ = build_synthetic_preprocessed_roots(self.base_dir / "derived_test_only", num_train_segments=2)
+        dm = WaymoLidarDataModule(
+            data_dir=point_root,
+            representation="point_clouds",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="",
+            test_subdirs="",
+            val_fraction=0.5,
+            num_workers=0,
+            max_cached_segments=1,
+            seed=19,
+        )
+
+        dm.setup("test")
+
+        all_train_segments = set(source_segments_map(point_root)["training"])
+        self.assertTrue(set(dm.test_dataset.segment_names).issubset(all_train_segments))
+        self.assertEqual(len(dm.test_dataset.segment_names), 1)
 
     def test_class_weight_alpha_zero_disables_weights(self) -> None:
         dm = WaymoLidarDataModule(

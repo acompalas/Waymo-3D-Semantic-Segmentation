@@ -129,6 +129,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
         self.class_weights: Optional[torch.Tensor] = None
         self.class_counts: Optional[torch.Tensor] = None
         self.class_names = load_class_names(self.data_dir, num_classes=self.num_classes)
+        self._segment_plan_cache: dict[tuple[bool, bool], tuple[list[str], list[str], list[str]]] = {}
 
     def _dataset_cls(self):
         if self.representation == "point_clouds":
@@ -180,23 +181,60 @@ class WaymoLidarDataModule(L.LightningDataModule):
             seed=seed,
         )
 
-    def _split_train_val_segments(self) -> tuple[list[str], list[str]]:
+    def _holdout_segment_count(self, num_segments: int, *, reserve: int) -> int:
+        holdout_count = int(round(num_segments * self.val_fraction))
+        return max(1, min(holdout_count, num_segments - reserve))
+
+    def _resolve_segment_plan(self, *, include_val: bool, include_test: bool) -> tuple[list[str], list[str], list[str]]:
+        cache_key = (bool(include_val), bool(include_test))
+        cached = self._segment_plan_cache.get(cache_key)
+        if cached is not None:
+            train_segments, val_segments, test_segments = cached
+            return list(train_segments), list(val_segments), list(test_segments)
+
         train_segments = self._segments_for_subdirs(self.train_subdirs)
         if not train_segments:
             raise ValueError(f"No train segments found for subdirs={self.train_subdirs}")
-        if len(train_segments) <= 1:
-            raise ValueError("Need at least 2 train segments to create a train/val split.")
+
+        derive_val = bool(include_val)
+        derive_test = bool(include_test)
+        if not derive_val and not derive_test:
+            self._segment_plan_cache[cache_key] = (list(train_segments), [], [])
+            return list(train_segments), [], []
+
         if self.val_fraction <= 0.0:
-            raise ValueError("val_fraction must be > 0 when val_subdirs is empty.")
+            raise ValueError("val_fraction must be > 0 when val_subdirs or test_subdirs is empty.")
+
+        min_required = 1 + int(derive_val) + int(derive_test)
+        if len(train_segments) < min_required:
+            if derive_val and derive_test:
+                raise ValueError("Need at least 3 train segments to create train/val/test splits.")
+            raise ValueError("Need at least 2 train segments to create a held-out split from train segments.")
 
         rng = np.random.default_rng(self.seed)
         perm = np.array(train_segments, dtype=object)
         rng.shuffle(perm)
-        val_count = int(round(len(perm) * self.val_fraction))
-        val_count = max(1, min(val_count, len(perm) - 1))
-        val_segments = sorted(str(x) for x in perm[:val_count].tolist())
-        train_only = sorted(str(x) for x in perm[val_count:].tolist())
-        return train_only, val_segments
+
+        start = 0
+        val_segments: list[str] = []
+        test_segments: list[str] = []
+
+        if derive_val:
+            remaining = len(perm) - start
+            reserve = 1 + int(derive_test)
+            val_count = self._holdout_segment_count(remaining, reserve=reserve)
+            val_segments = sorted(str(x) for x in perm[start : start + val_count].tolist())
+            start += val_count
+
+        if derive_test:
+            remaining = len(perm) - start
+            test_count = self._holdout_segment_count(remaining, reserve=1)
+            test_segments = sorted(str(x) for x in perm[start : start + test_count].tolist())
+            start += test_count
+
+        train_only = sorted(str(x) for x in perm[start:].tolist())
+        self._segment_plan_cache[cache_key] = (list(train_only), list(val_segments), list(test_segments))
+        return list(train_only), list(val_segments), list(test_segments)
 
     def _subset_frames_evenly(
         self,
@@ -238,10 +276,13 @@ class WaymoLidarDataModule(L.LightningDataModule):
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
+            planned_train_segments, planned_val_segments, _ = self._resolve_segment_plan(
+                include_val=not self.val_subdirs,
+                include_test=not self.test_subdirs,
+            )
             if self.val_subdirs:
-                train_segments = self._subsample_train_segments(self._segments_for_subdirs(self.train_subdirs))
                 self.train_dataset = self._make_dataset(
-                    segments=train_segments,
+                    segments=self._subsample_train_segments(planned_train_segments),
                     seed=self.seed,
                     deterministic_sampling=False,
                 )
@@ -251,14 +292,13 @@ class WaymoLidarDataModule(L.LightningDataModule):
                     deterministic_sampling=True,
                 )
             else:
-                train_segments, val_segments = self._split_train_val_segments()
                 self.train_dataset = self._make_dataset(
-                    segments=self._subsample_train_segments(train_segments),
+                    segments=self._subsample_train_segments(planned_train_segments),
                     seed=self.seed,
                     deterministic_sampling=False,
                 )
                 self.val_dataset = self._make_dataset(
-                    segments=val_segments,
+                    segments=planned_val_segments,
                     seed=self.seed + 1,
                     deterministic_sampling=True,
                 )
@@ -289,6 +329,24 @@ class WaymoLidarDataModule(L.LightningDataModule):
                     seed=self.seed + 2,
                     deterministic_sampling=True,
                 )
+            else:
+                cache_key = (not self.val_subdirs, True)
+                if cache_key in self._segment_plan_cache:
+                    _, _, planned_test_segments = self._resolve_segment_plan(
+                        include_val=cache_key[0],
+                        include_test=cache_key[1],
+                    )
+                else:
+                    _, _, planned_test_segments = self._resolve_segment_plan(
+                        include_val=False,
+                        include_test=True,
+                    )
+                if planned_test_segments:
+                    self.test_dataset = self._make_dataset(
+                        segments=planned_test_segments,
+                        seed=self.seed + 2,
+                        deterministic_sampling=True,
+                    )
 
     def set_epoch(self, epoch: int) -> None:
         if self._train_sampler is not None:

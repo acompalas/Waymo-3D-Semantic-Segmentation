@@ -139,11 +139,11 @@ These are required for every command.
 | `--range-data-dir` | preprocessed range-image dataset root | `data/preprocessed/range_images` |
 | `--train-subdirs` | comma-free source split name(s) used for training | `"training"` |
 | `--val-subdirs` | explicit validation source split(s); empty means split train segments with `--val-fraction` | `""` |
-| `--test-subdirs` | source split(s) used for test/final evaluation | `"validation"` |
+| `--test-subdirs` | source split(s) used for test/final evaluation; explicit empty string holds out test segments from `--train-subdirs` | `"validation"` |
 | `--batch-size` | batch size | `2` |
 | `--num-points` | sampled point count for point-cloud datasets | `16384` |
 | `--num-classes` | number of semantic classes | `23` |
-| `--val-fraction` | fraction of train segments used for validation when `--val-subdirs` is empty | `0.1` |
+| `--val-fraction` | fraction of train segments used for each derived holdout split when `--val-subdirs` and/or `--test-subdirs` is empty | `0.1` |
 | `--num-workers` | dataloader worker count | `4` |
 | `--worker-start-method` | multiprocessing start method | `"spawn"` |
 | `--max-epochs` | training epochs | `20` |
@@ -178,7 +178,7 @@ These are required for every command.
 | `--checkpoint` | checkpoint path to evaluate | required |
 | `--point-data-dir` | preprocessed point-cloud dataset root | `data/preprocessed/point_clouds` |
 | `--range-data-dir` | preprocessed range-image dataset root | `data/preprocessed/range_images` |
-| `--test-subdirs` | source split(s) used for evaluation data | `"validation"` |
+| `--test-subdirs` | source split(s) used for evaluation data; explicit empty string holds out test segments from the training split used by the datamodule | `"validation"` |
 | `--splits` | comma-separated splits to evaluate | `"test"` |
 | `--max-batches` | cap evaluation to the first N batches per split; `0` means no cap | `0` |
 | `--batch-size` | evaluation batch size | `2` |
