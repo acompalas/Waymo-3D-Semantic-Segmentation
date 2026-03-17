@@ -79,6 +79,17 @@ class SegmentationLightningModule(L.LightningModule):
     def get_confusion_matrix(self, stage: str) -> torch.Tensor:
         return self._confmat_for_stage(stage).detach().clone()
 
+    def _log_trainer_epoch(self, stage: str) -> None:
+        self.log(
+            "trainer/epoch",
+            float(self.current_epoch),
+            on_step=(stage == "train"),
+            on_epoch=(stage != "train"),
+            prog_bar=False,
+            logger=True,
+            batch_size=1,
+        )
+
     def _log_confusion_metrics(self, stage: str) -> None:
         if not self._stage_has_predictions[stage]:
             return
@@ -132,6 +143,7 @@ class SegmentationLightningModule(L.LightningModule):
 
     def _consume_and_log_stage_output(self, stage: str, output: dict[str, Any]) -> torch.Tensor:
         output = validate_stage_output(output)
+        self._log_trainer_epoch(stage)
         loss = output["loss"]
         metric_weight = stage_output_metric_weight(output)
         log_weight = max(1, metric_weight)
