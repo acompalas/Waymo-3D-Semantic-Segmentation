@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--drive-root", type=Path, default=Path("MyDrive/ece271b"))
     parser.add_argument("--range-workers", type=int, default=4)
     parser.add_argument("--point-workers", type=int, default=4)
+    parser.add_argument("--progress-style", type=str, choices=["tqdm", "print", "none"], default="print")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--skip-python-deps", action="store_true")
     return parser.parse_args()
@@ -165,6 +166,7 @@ def preprocess_range_images(
     output_dir: Path,
     proto_path: Path,
     num_workers: int,
+    progress_style: str,
     overwrite: bool,
 ) -> None:
     cmd = [
@@ -179,13 +181,21 @@ def preprocess_range_images(
         str(proto_path),
         "--num-workers",
         str(num_workers),
+        "--progress-style",
+        str(progress_style),
     ]
     if overwrite:
         cmd.append("--overwrite")
     run_command(cmd, cwd=REPO_ROOT)
 
 
-def preprocess_point_clouds(range_dir: Path, output_dir: Path, num_workers: int, overwrite: bool) -> None:
+def preprocess_point_clouds(
+    range_dir: Path,
+    output_dir: Path,
+    num_workers: int,
+    progress_style: str,
+    overwrite: bool,
+) -> None:
     cmd = [
         sys.executable,
         "-u",
@@ -196,6 +206,8 @@ def preprocess_point_clouds(range_dir: Path, output_dir: Path, num_workers: int,
         str(output_dir),
         "--num-workers",
         str(num_workers),
+        "--progress-style",
+        str(progress_style),
     ]
     if overwrite:
         cmd.append("--overwrite")
@@ -233,6 +245,7 @@ def main() -> None:
         output_dir=range_output_dir,
         proto_path=proto_path,
         num_workers=int(args.range_workers),
+        progress_style=str(args.progress_style),
         overwrite=bool(args.overwrite),
     )
     print("\nStarting point-cloud preprocessing...")
@@ -240,6 +253,7 @@ def main() -> None:
         range_dir=range_output_dir,
         output_dir=point_output_dir,
         num_workers=int(args.point_workers),
+        progress_style=str(args.progress_style),
         overwrite=bool(args.overwrite),
     )
 

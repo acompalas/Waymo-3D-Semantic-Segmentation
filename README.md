@@ -117,6 +117,7 @@ For a Google Colab workflow, use [`scripts/colab_preprocess.py`](scripts/colab_p
 ```
 
 The script always reads raw data from `gs://waymo_open_dataset_v_2_0_1/`, downloads `segmentation.proto` from the official Waymo GitHub repo, and writes the preprocessed datasets under your chosen Drive root.
+By default it uses `--progress-style print`, which is easier to follow in Colab than `tqdm`. The underlying preprocessing CLIs also support `--progress-style tqdm` and `--progress-style none`.
 
 ## CLI Arguments
 

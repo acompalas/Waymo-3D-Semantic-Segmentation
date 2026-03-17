@@ -33,12 +33,49 @@ def parse_args() -> argparse.Namespace:
         help="Number of worker processes for segment conversion.",
     )
     p.add_argument(
+        "--progress-style",
+        type=str,
+        choices=["tqdm", "print", "none"],
+        default="tqdm",
+        help="Progress reporting style.",
+    )
+    p.add_argument(
         "--no-progress",
         action="store_true",
-        help="Disable tqdm progress bars.",
+        help="Disable progress output. Deprecated in favor of --progress-style none.",
     )
     p.add_argument("--overwrite", action="store_true")
     return p.parse_args()
+
+
+class _ProgressReporter:
+    def __init__(self, *, total: int, style: str, desc: str) -> None:
+        self.total = int(total)
+        self.style = str(style)
+        self.desc = str(desc)
+        self.count = 0
+        self._bar = None
+        if self.style == "tqdm":
+            self._bar = tqdm(total=self.total, desc=self.desc, unit="segment")
+
+    def update(self, segment: str, frames: int) -> None:
+        self.count += 1
+        if self.style == "tqdm":
+            assert self._bar is not None
+            self._bar.update(1)
+            return
+        if self.style == "print":
+            print(f"{self.desc}: {self.count}/{self.total} segments done - {segment} ({int(frames)} frames)", flush=True)
+
+    def close(self) -> None:
+        if self._bar is not None:
+            self._bar.close()
+
+
+def _resolve_progress_style(args: argparse.Namespace) -> str:
+    if bool(args.no_progress):
+        return "none"
+    return str(args.progress_style)
 
 
 def _read_json(path: Path) -> Any:
@@ -306,28 +343,28 @@ def _process_segments(
     out_segments_root: Path,
     tasks: list[tuple[str, bool]],
     num_workers: int,
-    show_progress: bool,
+    progress_style: str,
 ) -> None:
     for segment, _ in tasks:
         if not (in_segments_root / segment).exists():
             raise FileNotFoundError(f"Segment listed in source file but missing in range-dir/segments: {segment}")
 
     if num_workers <= 1:
-        progress = tqdm(total=len(tasks), desc="segments", unit="segment", disable=not show_progress)
+        progress = _ProgressReporter(total=len(tasks), style=progress_style, desc="segments")
         try:
             for segment, is_labeled in tasks:
-                _process_segment_worker(
+                done_segment, num_frames = _process_segment_worker(
                     in_segments_root=in_segments_root,
                     out_segments_root=out_segments_root,
                     segment=segment,
                     is_labeled=is_labeled,
                 )
-                progress.update(1)
+                progress.update(done_segment, num_frames)
         finally:
             progress.close()
         return
 
-    progress = tqdm(total=len(tasks), desc="segments", unit="segment", disable=not show_progress)
+    progress = _ProgressReporter(total=len(tasks), style=progress_style, desc="segments")
     try:
         with ProcessPoolExecutor(max_workers=max(1, int(num_workers)), mp_context=mp.get_context("spawn")) as pool:
             futures = [
@@ -341,8 +378,8 @@ def _process_segments(
                 for segment, is_labeled in tasks
             ]
             for future in as_completed(futures):
-                future.result()
-                progress.update(1)
+                done_segment, num_frames = future.result()
+                progress.update(done_segment, num_frames)
     finally:
         progress.close()
 
@@ -379,7 +416,7 @@ def main() -> None:
         out_segments_root=out_segments_root,
         tasks=tasks,
         num_workers=int(args.num_workers),
-        show_progress=not bool(args.no_progress),
+        progress_style=_resolve_progress_style(args),
     )
     print(f"Wrote dense point-cloud artifacts to: {output_dir}")
 
