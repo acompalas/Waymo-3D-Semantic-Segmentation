@@ -64,6 +64,8 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
             backbone_name,
             input_dim=backbone_input_dim,
             time_dim=self.behavior_impl.time_dim,
+            point_input_dim=model_input_dim,
+            num_classes=int(num_classes),
             **backbone_kwargs,
         )
         self.head = PointHead(input_dim=int(self.backbone.output_dim), output_dim=int(num_classes))
