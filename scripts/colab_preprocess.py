@@ -169,6 +169,7 @@ def preprocess_range_images(
 ) -> None:
     cmd = [
         sys.executable,
+        "-u",
         str(REPO_ROOT / "data_pipeline" / "preprocess_range_images.py"),
         "--data-dir",
         str(raw_data_dir),
@@ -187,6 +188,7 @@ def preprocess_range_images(
 def preprocess_point_clouds(range_dir: Path, output_dir: Path, num_workers: int, overwrite: bool) -> None:
     cmd = [
         sys.executable,
+        "-u",
         str(REPO_ROOT / "data_pipeline" / "preprocess_point_clouds.py"),
         "--range-dir",
         str(range_dir),
@@ -225,6 +227,7 @@ def main() -> None:
     print(f"  range_output_dir: {range_output_dir}")
     print(f"  point_output_dir: {point_output_dir}")
 
+    print("\nStarting range-image preprocessing...")
     preprocess_range_images(
         raw_data_dir=raw_data_dir,
         output_dir=range_output_dir,
@@ -232,6 +235,7 @@ def main() -> None:
         num_workers=int(args.range_workers),
         overwrite=bool(args.overwrite),
     )
+    print("\nStarting point-cloud preprocessing...")
     preprocess_point_clouds(
         range_dir=range_output_dir,
         output_dir=point_output_dir,
