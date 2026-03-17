@@ -92,6 +92,20 @@ python -m src.main render \
   --checkpoint output/range_images__unet__direct/.../checkpoints/last.ckpt
 ```
 
+## Colab Preprocessing
+
+For a Google Colab workflow, use [`scripts/colab_preprocess.py`](scripts/colab_preprocess.py) with `%run` so Drive and GCP authentication happen in the notebook kernel:
+
+```python
+%cd /content/final_project
+%run scripts/colab_preprocess.py \
+  --drive-root MyDrive/ece271b \
+  --range-workers 4 \
+  --point-workers 4
+```
+
+The script always reads raw data from `gs://waymo_open_dataset_v_2_0_1/`, downloads `segmentation.proto` from the official Waymo GitHub repo, and writes the preprocessed datasets under your chosen Drive root.
+
 ## CLI Arguments
 
 ### Shared component-selection arguments
