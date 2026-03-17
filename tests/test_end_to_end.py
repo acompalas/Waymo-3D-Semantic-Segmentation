@@ -439,6 +439,53 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertTrue(any(key.startswith("eval_test/pointcloud_") for key in logged_keys))
         self.assertTrue(logger.experiment.finished)
 
+    def test_evaluate_logs_test_pointclouds_without_separate_predict_pass(self) -> None:
+        model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
+        ckpt_path = _fit_and_save(model, self._point_dm(), self.base_dir / "eval_no_reinfer_ckpt")
+        output_dir = self.base_dir / "eval_no_reinfer"
+        with (
+            patch("src.main.WandbLogger", FakeWandbLogger),
+            patch("src.runtime.wandb_logging._import_wandb", return_value=FakeWandbModule),
+            patch.object(
+                PointCloudTaskModel,
+                "predict_segmented_pointcloud",
+                side_effect=AssertionError("evaluate should reuse cached stage outputs"),
+            ),
+        ):
+            run_evaluate(
+                argparse.Namespace(
+                    command="evaluate",
+                    representation="point_clouds",
+                    behavior="direct",
+                    backbone="handcrafted",
+                    checkpoint=ckpt_path,
+                    point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
+                    test_subdirs="validation",
+                    splits="test",
+                    max_batches=1,
+                    batch_size=1,
+                    num_points=8,
+                    num_classes=23,
+                    num_workers=0,
+                    worker_start_method="spawn",
+                    max_cached_segments=1,
+                    accelerator="cpu",
+                    devices=1,
+                    precision="32",
+                    seed=0,
+                    output_dir=output_dir,
+                    wandb_project="test-project",
+                    wandb_entity=None,
+                    wandb_run_name=None,
+                    wandb_tags="eval",
+                    log_pointcloud_count=4,
+                )
+            )
+        logger = FakeWandbLogger.instances[-1]
+        logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
+        self.assertTrue(any(key.startswith("eval_test/pointcloud_") for key in logged_keys))
+
     def test_default_wandb_run_name_uses_timestamp_suffix(self) -> None:
         output_dir = self.base_dir / "wandb_name_increment"
         common_args = dict(

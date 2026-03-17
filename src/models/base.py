@@ -102,12 +102,13 @@ class SegmentationLightningModule(L.LightningModule):
             self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=metric_weight)
         return loss
 
-    def _shared_stage_step(self, batch: dict[str, Any], stage: str) -> torch.Tensor:
+    def _shared_stage_step(self, batch: dict[str, Any], stage: str) -> dict[str, Any]:
         output = self.compute_stage_output(
             batch,
             evaluation=(stage != "train"),
         )
-        return self._consume_and_log_stage_output(stage, output)
+        self._consume_and_log_stage_output(stage, output)
+        return output
 
     def compute_stage_output(
         self,
@@ -176,12 +177,12 @@ class SegmentationLightningModule(L.LightningModule):
         self.prepare_runtime()
 
     def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
-        return self._shared_stage_step(batch, stage="train")
+        return self._shared_stage_step(batch, stage="train")["loss"]
 
-    def validation_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
+    def validation_step(self, batch: dict[str, Any], batch_idx: int) -> dict[str, Any]:
         return self._shared_stage_step(batch, stage="val")
 
-    def test_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
+    def test_step(self, batch: dict[str, Any], batch_idx: int) -> dict[str, Any]:
         return self._shared_stage_step(batch, stage="test")
 
     def predict_segmented_pointcloud(
@@ -243,6 +244,7 @@ class PointCloudSegmentationModel(SegmentationLightningModule):
     ) -> torch.Tensor:
         raise NotImplementedError
 
+    @torch.inference_mode()
     def predict_segmented_pointcloud(
         self,
         *,
@@ -288,6 +290,7 @@ class RangeImageSegmentationModel(SegmentationLightningModule):
     def predict_range_labels(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
+    @torch.inference_mode()
     def predict_segmented_pointcloud(
         self,
         *,

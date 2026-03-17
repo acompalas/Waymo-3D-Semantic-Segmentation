@@ -21,7 +21,7 @@ from .runtime.registry import (
     representation_choices,
 )
 from .runtime.report_runner import evaluate_and_log_splits, parse_report_splits, prepare_model_for_reporting, setup_datamodule_for_report
-from .runtime.wandb_logging import WandbSegmentationCallback, log_audit_pointcloud_splits
+from .runtime.wandb_logging import WandbSegmentationCallback
 from .tools import label_colors, render_point_cloud, save_gif
 
 
@@ -366,15 +366,7 @@ def run_train(args: argparse.Namespace) -> None:
         class_names=report_model.class_names,
         step=trainer.global_step,
         prefix="final",
-    )
-    log_audit_pointcloud_splits(
-        logger,
-        report_model,
-        datamodule,
-        splits=("train", "val", "test"),
-        count=int(args.log_pointcloud_count),
-        step=trainer.global_step,
-        prefix="final",
+        audit_pointcloud_count=int(args.log_pointcloud_count),
     )
     logger.experiment.finish()
 
@@ -401,15 +393,7 @@ def run_evaluate(args: argparse.Namespace) -> None:
         step=0,
         prefix="eval",
         max_batches=args.max_batches,
-    )
-    log_audit_pointcloud_splits(
-        logger,
-        model,
-        datamodule,
-        splits=requested_splits,
-        count=int(args.log_pointcloud_count),
-        step=0,
-        prefix="eval",
+        audit_pointcloud_count=int(args.log_pointcloud_count),
     )
     logger.experiment.finish()
 

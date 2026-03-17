@@ -307,6 +307,17 @@ class WaymoLidarDataModule(L.LightningDataModule):
         subset._set_frames(self._subset_frames_evenly(dataset, samples_per_segment=samples_per_segment))
         return subset
 
+    def effective_validation_dataset(self) -> PreprocessedPointCloudDataset | PreprocessedRangeImageDataset:
+        if self.val_dataset is None:
+            raise RuntimeError("Call setup('fit') before requesting the effective validation dataset.")
+        if self.val_samples_per_segment > 0:
+            return self._subset_dataset_for_validation(
+                self.val_dataset,
+                samples_per_segment=self.val_samples_per_segment,
+                seed=self.seed + 101,
+            )
+        return self.val_dataset
+
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
             planned_train_segments, planned_val_segments, _ = self._resolve_segment_plan(
@@ -424,13 +435,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
     def val_dataloader(self) -> DataLoader:
         if self.val_dataset is None:
             raise RuntimeError("Call setup('fit') before requesting val_dataloader().")
-        dataset = self.val_dataset
-        if self.val_samples_per_segment > 0:
-            dataset = self._subset_dataset_for_validation(
-                self.val_dataset,
-                samples_per_segment=self.val_samples_per_segment,
-                seed=self.seed + 101,
-            )
+        dataset = self.effective_validation_dataset()
         self._val_sampler = SceneShuffleBatchSampler(
             records=dataset.records,
             batch_size=self.batch_size,
@@ -476,17 +481,16 @@ class WaymoLidarDataModule(L.LightningDataModule):
             return self._loader(dataset, sampler)
 
         if stage == "val":
-            if self.val_dataset is None:
-                raise RuntimeError("Call setup('fit') before requesting report_dataloader('val').")
+            dataset = self.effective_validation_dataset()
             sampler = SceneShuffleBatchSampler(
-                records=self.val_dataset.records,
+                records=dataset.records,
                 batch_size=self.batch_size,
                 shuffle_scenes=False,
                 shuffle_within_scene=False,
                 drop_last=False,
                 seed=self.seed + 302,
             )
-            return self._loader(self.val_dataset, sampler)
+            return self._loader(dataset, sampler)
 
         if stage == "test":
             return self.test_dataloader()

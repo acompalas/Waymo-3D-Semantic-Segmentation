@@ -6,6 +6,7 @@ from typing import Iterable
 
 from lightning.pytorch.callbacks import Callback
 import numpy as np
+import torch
 
 from ..data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
 from .common import sanitize_metric_name
@@ -192,15 +193,59 @@ def _build_point_dataset(
     *,
     segments: Iterable[str],
     seed: int,
+    num_points: int,
 ) -> PreprocessedPointCloudDataset:
     return PreprocessedPointCloudDataset(
         path=path,
         segments=list(segments),
-        num_points=1,
+        num_points=max(1, int(num_points)),
         deterministic_sampling=True,
         max_cached_segments=1,
         seed=seed,
     )
+
+
+def _example_key(segment: str, timestamp: int) -> tuple[str, int]:
+    return str(segment), int(timestamp)
+
+
+def _batch_metadata(batch: dict) -> list[tuple[str, int]]:
+    segments = batch.get("segment_context_name")
+    timestamps = batch.get("frame_timestamp_micros")
+    if segments is None or timestamps is None:
+        return []
+
+    if isinstance(segments, str):
+        segment_values = [segments]
+    else:
+        segment_values = [str(value) for value in segments]
+
+    if isinstance(timestamps, torch.Tensor):
+        timestamp_values = timestamps.detach().cpu().tolist()
+    elif isinstance(timestamps, (list, tuple)):
+        timestamp_values = list(timestamps)
+    else:
+        timestamp_values = [timestamps]
+
+    return [_example_key(segment, int(timestamp)) for segment, timestamp in zip(segment_values, timestamp_values)]
+
+
+def _sampled_point_frame(
+    dataset: PreprocessedPointCloudDataset,
+    *,
+    segment: str,
+    timestamp: int,
+) -> dict:
+    dataset_idx = dataset.resolve_dataset_index(segment, timestamp)
+    sampled = dataset[dataset_idx]
+    return {
+        "xyz": sampled["points"].detach().cpu().numpy().astype(np.float32, copy=False),
+        "point_features": sampled["point_features"].detach().cpu().numpy().astype(np.float32, copy=False),
+        "labels": sampled["labels"].detach().cpu().numpy().astype(np.int64, copy=False),
+        "valid_label": sampled["valid_label"].detach().cpu().numpy().astype(bool, copy=False),
+        "segment_context_name": str(sampled["segment_context_name"]),
+        "frame_timestamp_micros": int(sampled["frame_timestamp_micros"]),
+    }
 
 
 def build_audit_source(
@@ -209,22 +254,27 @@ def build_audit_source(
     split: str,
     count: int,
 ) -> AuditSource | None:
-    dataset = {
-        "train": datamodule.train_dataset,
-        "val": datamodule.val_dataset,
-        "test": datamodule.test_dataset,
-    }.get(str(split))
+    split_name = str(split)
+    if split_name == "val" and hasattr(datamodule, "effective_validation_dataset"):
+        dataset = datamodule.effective_validation_dataset()
+    else:
+        dataset = {
+            "train": datamodule.train_dataset,
+            "val": datamodule.val_dataset,
+            "test": datamodule.test_dataset,
+        }.get(split_name)
     if dataset is None:
         return None
 
     point_dataset = _build_point_dataset(
         Path(datamodule.point_data_dir),
         segments=dataset.segment_names,
-        seed=datamodule.seed + {"train": 401, "val": 402, "test": 403}[str(split)],
+        seed=datamodule.seed + {"train": 401, "val": 402, "test": 403}[split_name],
+        num_points=datamodule.num_points,
     )
     range_dataset = dataset if isinstance(dataset, PreprocessedRangeImageDataset) else None
     return AuditSource(
-        split=str(split),
+        split=split_name,
         point_dataset=point_dataset,
         range_dataset=range_dataset,
         examples=select_audit_examples(dataset, count=int(count)),
@@ -244,19 +294,109 @@ def log_audit_pointclouds(
 
     payload: dict[str, object] = {}
     for example_idx, example in enumerate(source.examples):
-        point_frame = source.point_dataset.get_dense_frame(example.segment, example.timestamp)
+        if source.range_dataset is None:
+            point_frame = _sampled_point_frame(
+                source.point_dataset,
+                segment=example.segment,
+                timestamp=example.timestamp,
+            )
+        else:
+            point_frame = source.point_dataset.get_dense_frame(example.segment, example.timestamp)
         range_frame = (
             source.range_dataset.get_frame_data(example.segment, example.timestamp)
             if source.range_dataset is not None
             else None
         )
-        prediction = model.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
+        with torch.inference_mode():
+            prediction = model.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
         name = f"{source.split}/pointcloud_{example_idx}"
         if prefix:
             name = f"{prefix}_{name}"
         payload[name] = segmented_pointcloud_to_object3d(prediction)
     if payload:
         logger.experiment.log(payload, step=step)
+
+
+def log_cached_audit_pointclouds(
+    logger,
+    source: AuditSource | None,
+    cached_predictions: dict[tuple[str, int], dict],
+    *,
+    step: int,
+    prefix: str | None = None,
+) -> None:
+    if source is None or not source.examples:
+        return
+
+    payload: dict[str, object] = {}
+    for example_idx, example in enumerate(source.examples):
+        prediction = cached_predictions.get(_example_key(example.segment, example.timestamp))
+        if prediction is None:
+            continue
+        name = f"{source.split}/pointcloud_{example_idx}"
+        if prefix:
+            name = f"{prefix}_{name}"
+        payload[name] = segmented_pointcloud_to_object3d(prediction)
+    if payload:
+        logger.experiment.log(payload, step=step)
+
+
+def cache_audit_predictions_from_stage_batch(
+    batch: dict,
+    outputs: dict,
+    source: AuditSource | None,
+    cached_predictions: dict[tuple[str, int], dict],
+) -> None:
+    if source is None or "preds" not in outputs:
+        return
+
+    target_keys = {_example_key(example.segment, example.timestamp) for example in source.examples}
+    if not target_keys:
+        return
+
+    metadata = _batch_metadata(batch)
+    if not metadata:
+        return
+
+    preds = outputs["preds"]
+    if not isinstance(preds, torch.Tensor):
+        return
+
+    if "points" in batch:
+        labels = batch["labels"]
+        valid_label = batch["valid_label"]
+        points = batch["points"]
+        for sample_idx, key in enumerate(metadata):
+            if key not in target_keys or key in cached_predictions:
+                continue
+            cached_predictions[key] = {
+                "points_xyz": points[sample_idx].detach().cpu().numpy().astype(np.float32, copy=False),
+                "pred_labels": preds[sample_idx].detach().cpu().numpy().astype(np.int64, copy=False),
+                "true_labels": labels[sample_idx].detach().cpu().numpy().astype(np.int64, copy=False),
+                "valid_label": valid_label[sample_idx].detach().cpu().numpy().astype(bool, copy=False),
+            }
+        return
+
+    if "range_images" in batch and source.range_dataset is not None:
+        labels = batch["semantic"]
+        returns = int(batch["range_images"].shape[1])
+        for sample_idx, key in enumerate(metadata):
+            if key not in target_keys or key in cached_predictions:
+                continue
+            segment, timestamp = key
+            point_frame = source.point_dataset.get_dense_frame(segment, timestamp)
+            valid_geometry = point_frame["valid_geometry"].reshape(-1).astype(bool, copy=False)
+            point_valid_label = point_frame["valid_label"].reshape(-1).astype(bool, copy=False)[valid_geometry]
+            start = sample_idx * returns
+            stop = start + returns
+            sample_preds = preds[start:stop].reshape(-1).detach().cpu().numpy().astype(np.int64, copy=False)
+            sample_labels = labels[sample_idx].reshape(-1).detach().cpu().numpy().astype(np.int64, copy=False)
+            cached_predictions[key] = {
+                "points_xyz": point_frame["xyz"].reshape(-1, 3)[valid_geometry].astype(np.float32, copy=False),
+                "pred_labels": sample_preds[valid_geometry],
+                "true_labels": sample_labels[valid_geometry],
+                "valid_label": point_valid_label,
+            }
 
 
 def log_audit_pointcloud_splits(
@@ -285,6 +425,7 @@ class WandbSegmentationCallback(Callback):
         self.log_pointcloud_count = int(log_pointcloud_count)
         self._class_legend_logged = False
         self._audit_sources: dict[str, AuditSource | None] = {}
+        self._cached_val_predictions: dict[tuple[str, int], dict] = {}
 
     def _should_skip(self, trainer) -> bool:
         return bool(getattr(trainer, "sanity_checking", False)) or not bool(getattr(trainer, "is_global_zero", True))
@@ -309,6 +450,25 @@ class WandbSegmentationCallback(Callback):
 
     def on_fit_start(self, trainer, pl_module) -> None:
         self._ensure_ready(trainer, pl_module)
+
+    def on_validation_epoch_start(self, trainer, pl_module) -> None:
+        _ = trainer
+        _ = pl_module
+        self._cached_val_predictions = {}
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0) -> None:
+        _ = trainer
+        _ = pl_module
+        _ = batch_idx
+        _ = dataloader_idx
+        if not isinstance(outputs, dict):
+            return
+        cache_audit_predictions_from_stage_batch(
+            batch,
+            outputs,
+            self._audit_sources.get("val"),
+            self._cached_val_predictions,
+        )
 
     def on_train_epoch_end(self, trainer, pl_module) -> None:
         self._ensure_ready(trainer, pl_module)
@@ -341,9 +501,9 @@ class WandbSegmentationCallback(Callback):
             step=trainer.global_step,
             title="Validation confusion matrix",
         )
-        log_audit_pointclouds(
+        log_cached_audit_pointclouds(
             trainer.logger,
-            pl_module,
             self._audit_sources.get("val"),
+            self._cached_val_predictions,
             step=trainer.global_step,
         )

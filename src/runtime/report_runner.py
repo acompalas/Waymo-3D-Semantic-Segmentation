@@ -77,10 +77,14 @@ def evaluate_split(
     split: str,
     device: torch.device,
     max_batches: int = 0,
-) -> dict:
+    audit_source=None,
+) -> tuple[dict, dict[tuple[str, int], dict]]:
     loader = datamodule.report_dataloader(split)
     accumulator = StageReportAccumulator(split, num_classes=int(model.hparams.num_classes))
+    cached_predictions: dict[tuple[str, int], dict] = {}
     batch_limit = max(0, int(max_batches))
+    from .wandb_logging import cache_audit_predictions_from_stage_batch
+
     with torch.no_grad():
         for batch_idx, batch in enumerate(_progress_batches(loader, split=split)):
             if batch_limit and batch_idx >= batch_limit:
@@ -90,7 +94,8 @@ def evaluate_split(
                 evaluation=True,
             )
             accumulator.consume(stage_output)
-    return accumulator.summary()
+            cache_audit_predictions_from_stage_batch(batch, stage_output, audit_source, cached_predictions)
+    return accumulator.summary(), cached_predictions
 
 
 def evaluate_and_log_splits(
@@ -104,16 +109,32 @@ def evaluate_and_log_splits(
     step: int,
     prefix: str | None = None,
     max_batches: int = 0,
+    audit_pointcloud_count: int = 0,
 ) -> None:
-    from .wandb_logging import log_stage_report_to_wandb
+    from .wandb_logging import build_audit_source, log_cached_audit_pointclouds, log_stage_report_to_wandb
 
     for stage in splits:
-        stage_payload = evaluate_split(model, datamodule, split=stage, device=device, max_batches=max_batches)
+        audit_source = build_audit_source(datamodule, split=stage, count=int(audit_pointcloud_count))
+        stage_payload, cached_predictions = evaluate_split(
+            model,
+            datamodule,
+            split=stage,
+            device=device,
+            max_batches=max_batches,
+            audit_source=audit_source,
+        )
         log_stage_report_to_wandb(
             logger,
             stage=stage,
             stage_payload=stage_payload,
             class_names=class_names,
+            step=step,
+            prefix=prefix,
+        )
+        log_cached_audit_pointclouds(
+            logger,
+            audit_source,
+            cached_predictions,
             step=step,
             prefix=prefix,
         )
