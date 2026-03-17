@@ -44,22 +44,47 @@ def update_confusion_matrix(
     confmat += bincount.to(device=confmat.device)
 
 
-def iou_metrics_from_confusion_matrix(confmat: torch.Tensor, *, ignore_class_zero: bool = True) -> dict[str, torch.Tensor]:
+def _safe_ratio(numerator: torch.Tensor, denominator: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    values = torch.full_like(denominator, fill_value=-1.0, dtype=torch.float32)
+    valid = denominator > 0
+    values[valid] = numerator[valid] / denominator[valid].clamp_min(1e-6)
+    return values, valid
+
+
+def confusion_metrics_from_confusion_matrix(confmat: torch.Tensor, *, ignore_class_zero: bool = True) -> dict[str, torch.Tensor]:
     conf = confmat.to(dtype=torch.float32)
     tp = torch.diag(conf)
     fp = conf.sum(dim=0) - tp
     fn = conf.sum(dim=1) - tp
-    union = tp + fp + fn
 
-    iou = torch.full_like(union, fill_value=-1.0, dtype=torch.float32)
-    valid = union > 0
-    iou[valid] = tp[valid] / union[valid].clamp_min(1e-6)
+    iou, iou_valid = _safe_ratio(tp, tp + fp + fn)
+    precision, precision_valid = _safe_ratio(tp, tp + fp)
+    recall, recall_valid = _safe_ratio(tp, tp + fn)
 
-    metric_valid = valid.clone()
-    if ignore_class_zero and metric_valid.numel() > 0:
-        metric_valid[0] = False
-    miou = iou[metric_valid].mean() if bool(metric_valid.any()) else conf.new_tensor(0.0)
-    return {"per_class_iou": iou, "miou": miou}
+    if ignore_class_zero and iou_valid.numel() > 0:
+        iou_valid[0] = False
+    if ignore_class_zero and precision_valid.numel() > 0:
+        precision_valid[0] = False
+    if ignore_class_zero and recall_valid.numel() > 0:
+        recall_valid[0] = False
+
+    zero = conf.new_tensor(0.0)
+    miou = iou[iou_valid].mean() if bool(iou_valid.any()) else zero
+    mean_precision = precision[precision_valid].mean() if bool(precision_valid.any()) else zero
+    mean_recall = recall[recall_valid].mean() if bool(recall_valid.any()) else zero
+    return {
+        "per_class_iou": iou,
+        "miou": miou,
+        "per_class_precision": precision,
+        "mean_precision": mean_precision,
+        "per_class_recall": recall,
+        "mean_recall": mean_recall,
+    }
+
+
+def iou_metrics_from_confusion_matrix(confmat: torch.Tensor, *, ignore_class_zero: bool = True) -> dict[str, torch.Tensor]:
+    metrics = confusion_metrics_from_confusion_matrix(confmat, ignore_class_zero=ignore_class_zero)
+    return {"per_class_iou": metrics["per_class_iou"], "miou": metrics["miou"]}
 
 
 def scalarize_metric_tensor(value: torch.Tensor) -> float:

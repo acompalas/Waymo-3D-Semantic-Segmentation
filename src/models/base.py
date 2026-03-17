@@ -4,8 +4,8 @@ import lightning as L
 import numpy as np
 import torch
 
-from ..runtime.common import sanitize_metric_name
-from ..runtime.metrics import empty_confusion_matrix, iou_metrics_from_confusion_matrix
+from ..runtime.common import confusion_family_section_key, loss_accuracy_section_key, sanitize_metric_name
+from ..runtime.metrics import confusion_metrics_from_confusion_matrix, empty_confusion_matrix
 from ..runtime.stage_eval import consume_stage_output, stage_output_metric_weight, validate_stage_output
 
 
@@ -79,16 +79,52 @@ class SegmentationLightningModule(L.LightningModule):
     def get_confusion_matrix(self, stage: str) -> torch.Tensor:
         return self._confmat_for_stage(stage).detach().clone()
 
-    def _log_iou_metrics(self, stage: str) -> None:
+    def _log_confusion_metrics(self, stage: str) -> None:
         if not self._stage_has_predictions[stage]:
             return
-        metrics = iou_metrics_from_confusion_matrix(self._confmat_for_stage(stage), ignore_class_zero=True)
+        metrics = confusion_metrics_from_confusion_matrix(self._confmat_for_stage(stage), ignore_class_zero=True)
         self.log(f"{stage}_mIoU", metrics["miou"], on_step=False, on_epoch=True, prog_bar=True)
+        self.log(confusion_family_section_key(stage, "iou", "mIoU"), metrics["miou"], on_step=False, on_epoch=True, prog_bar=False)
+        self.log(
+            confusion_family_section_key(stage, "precision", "mean_precision"),
+            metrics["mean_precision"],
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+        )
+        self.log(
+            confusion_family_section_key(stage, "recall", "mean_recall"),
+            metrics["mean_recall"],
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+        )
         for cls_idx, cls_iou in enumerate(metrics["per_class_iou"]):
             if cls_idx == 0:
                 continue
             metric_name = self._class_metric_names[cls_idx]
             self.log(f"{stage}_IoU_{metric_name}", cls_iou, on_step=False, on_epoch=True, prog_bar=False)
+            self.log(
+                confusion_family_section_key(stage, "iou", metric_name),
+                cls_iou,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+            )
+            self.log(
+                confusion_family_section_key(stage, "precision", metric_name),
+                metrics["per_class_precision"][cls_idx],
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+            )
+            self.log(
+                confusion_family_section_key(stage, "recall", metric_name),
+                metrics["per_class_recall"][cls_idx],
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+            )
 
     def _consume_and_log_stage_output(self, stage: str, output: dict[str, Any]) -> torch.Tensor:
         output = validate_stage_output(output)
@@ -96,10 +132,26 @@ class SegmentationLightningModule(L.LightningModule):
         metric_weight = stage_output_metric_weight(output)
         log_weight = max(1, metric_weight)
         self.log(f"{stage}_loss", loss, on_step=(stage == "train"), on_epoch=True, prog_bar=True, batch_size=log_weight)
+        self.log(
+            loss_accuracy_section_key(stage, "loss"),
+            loss,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+            batch_size=log_weight,
+        )
         acc = consume_stage_output(self._confmat_for_stage(stage), output, num_classes=self._metric_num_classes)
         if acc is not None and metric_weight > 0:
             self._stage_has_predictions[stage] = True
             self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=metric_weight)
+            self.log(
+                loss_accuracy_section_key(stage, "accuracy"),
+                acc,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                batch_size=metric_weight,
+            )
         return loss
 
     def _shared_stage_step(self, batch: dict[str, Any], stage: str) -> dict[str, Any]:
@@ -146,19 +198,19 @@ class SegmentationLightningModule(L.LightningModule):
             dm.set_epoch(self.current_epoch)
 
     def on_train_epoch_end(self) -> None:
-        self._log_iou_metrics(stage="train")
+        self._log_confusion_metrics(stage="train")
 
     def on_validation_epoch_start(self) -> None:
         self.reset_stage_metrics("val")
 
     def on_validation_epoch_end(self) -> None:
-        self._log_iou_metrics(stage="val")
+        self._log_confusion_metrics(stage="val")
 
     def on_test_epoch_start(self) -> None:
         self.reset_stage_metrics("test")
 
     def on_test_epoch_end(self) -> None:
-        self._log_iou_metrics(stage="test")
+        self._log_confusion_metrics(stage="test")
 
     def on_fit_start(self) -> None:
         dm = self.trainer.datamodule

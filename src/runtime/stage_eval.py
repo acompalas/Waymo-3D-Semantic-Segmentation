@@ -2,7 +2,7 @@ from typing import Any
 
 import torch
 
-from .metrics import empty_confusion_matrix, iou_metrics_from_confusion_matrix, masked_accuracy, scalarize_metric_tensor, update_confusion_matrix
+from .metrics import confusion_metrics_from_confusion_matrix, empty_confusion_matrix, masked_accuracy, scalarize_metric_tensor, update_confusion_matrix
 
 
 REQUIRED_STAGE_OUTPUT_KEYS = {
@@ -94,10 +94,16 @@ class StageReportAccumulator:
             "loss": self.loss_sum / denom,
             "acc": self.acc_sum / denom,
         }
-        iou_metrics = iou_metrics_from_confusion_matrix(self.confmat, ignore_class_zero=True)
-        metrics["mIoU"] = scalarize_metric_tensor(iou_metrics["miou"])
-        for idx, value in enumerate(iou_metrics["per_class_iou"]):
+        confusion_metrics = confusion_metrics_from_confusion_matrix(self.confmat, ignore_class_zero=True)
+        metrics["mIoU"] = scalarize_metric_tensor(confusion_metrics["miou"])
+        metrics["mean_precision"] = scalarize_metric_tensor(confusion_metrics["mean_precision"])
+        metrics["mean_recall"] = scalarize_metric_tensor(confusion_metrics["mean_recall"])
+        for idx, value in enumerate(confusion_metrics["per_class_iou"]):
             metrics[f"IoU_class_{idx}"] = scalarize_metric_tensor(value)
+        for idx, value in enumerate(confusion_metrics["per_class_precision"]):
+            metrics[f"precision_class_{idx}"] = scalarize_metric_tensor(value)
+        for idx, value in enumerate(confusion_metrics["per_class_recall"]):
+            metrics[f"recall_class_{idx}"] = scalarize_metric_tensor(value)
         return {
             "metrics": metrics,
             "confusion_matrix": self.confmat.detach().cpu().tolist(),

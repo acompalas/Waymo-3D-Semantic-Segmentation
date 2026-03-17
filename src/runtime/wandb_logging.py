@@ -9,7 +9,13 @@ import numpy as np
 import torch
 
 from ..data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
-from .common import sanitize_metric_name
+from .common import (
+    confusion_family_section_key,
+    confusion_matrix_section_key,
+    loss_accuracy_section_key,
+    pointcloud_section_key,
+    sanitize_metric_name,
+)
 from ..tools.rendering import PALETTE, label_colors
 
 
@@ -17,6 +23,13 @@ def _import_wandb():
     import wandb
 
     return wandb
+
+
+def _log_wandb_payload(logger, payload: dict[str, object], *, step: int | None = None) -> None:
+    if step is not None:
+        logger.experiment.log(dict(payload, **{"trainer/global_step": int(step)}))
+        return
+    logger.experiment.log(payload)
 
 
 def _sequence_indices(length: int, count: int) -> list[int]:
@@ -99,6 +112,17 @@ def stage_metric_dict(
         if key in metrics:
             output[f"{metric_prefix}_{key}"] = float(metrics[key])
 
+    if "loss" in metrics:
+        output[loss_accuracy_section_key(stage, "loss", prefix=prefix)] = float(metrics["loss"])
+    if "acc" in metrics:
+        output[loss_accuracy_section_key(stage, "accuracy", prefix=prefix)] = float(metrics["acc"])
+    if "mIoU" in metrics:
+        output[confusion_family_section_key(stage, "iou", "mIoU", prefix=prefix)] = float(metrics["mIoU"])
+    if "mean_precision" in metrics:
+        output[confusion_family_section_key(stage, "precision", "mean_precision", prefix=prefix)] = float(metrics["mean_precision"])
+    if "mean_recall" in metrics:
+        output[confusion_family_section_key(stage, "recall", "mean_recall", prefix=prefix)] = float(metrics["mean_recall"])
+
     confusion = np.asarray(stage_payload.get("confusion_matrix", []), dtype=np.int64)
     if confusion.size == 0:
         return output
@@ -107,15 +131,23 @@ def stage_metric_dict(
         metric_key = f"IoU_{sanitize_metric_name(class_names[class_idx])}"
         raw_key = f"IoU_class_{class_idx}"
         if raw_key not in metrics:
-            continue
-        output[f"{metric_prefix}_{metric_key}"] = float(metrics[raw_key])
+            raw_key = None
+        if raw_key is not None:
+            output[f"{metric_prefix}_{metric_key}"] = float(metrics[raw_key])
+            output[confusion_family_section_key(stage, "iou", sanitize_metric_name(class_names[class_idx]), prefix=prefix)] = float(metrics[raw_key])
+        precision_key = f"precision_class_{class_idx}"
+        if precision_key in metrics:
+            output[confusion_family_section_key(stage, "precision", sanitize_metric_name(class_names[class_idx]), prefix=prefix)] = float(metrics[precision_key])
+        recall_key = f"recall_class_{class_idx}"
+        if recall_key in metrics:
+            output[confusion_family_section_key(stage, "recall", sanitize_metric_name(class_names[class_idx]), prefix=prefix)] = float(metrics[recall_key])
     return output
 
 
 def log_confusion_matrix_to_wandb(
     logger,
     *,
-    stage: str,
+    key: str,
     confusion_matrix: np.ndarray,
     class_names: list[str],
     step: int,
@@ -135,7 +167,7 @@ def log_confusion_matrix_to_wandb(
         string_fields={"title": title},
         split_table=False,
     )
-    logger.experiment.log({f"{stage}/confusion_matrix": chart}, step=step)
+    _log_wandb_payload(logger, {key: chart}, step=step)
 
 
 def log_stage_report_to_wandb(
@@ -153,12 +185,17 @@ def log_stage_report_to_wandb(
     confusion = stage_payload.get("confusion_matrix")
     if confusion is None:
         return
-    chart_title = f"{stage.title()} confusion matrix"
+    display_stage = {
+        "train": "Train",
+        "val": "Validation",
+        "test": "Test",
+    }.get(str(stage), str(stage).title())
+    chart_title = f"{display_stage} confusion matrix"
     if prefix:
         chart_title = f"{prefix.replace('_', ' ').title()} {chart_title}"
     log_confusion_matrix_to_wandb(
         logger,
-        stage=stage if prefix is None else f"{prefix}_{stage}",
+        key=confusion_matrix_section_key(stage, prefix=prefix),
         confusion_matrix=np.asarray(confusion, dtype=np.int64),
         class_names=class_names,
         step=step,
@@ -173,7 +210,7 @@ def log_class_legend(logger, class_names: list[str], *, step: int) -> None:
         rgb = tuple(int(round(value * 255.0)) for value in PALETTE[idx].tolist())
         rows.append([int(idx), str(name), *rgb])
     table = wandb.Table(columns=["class_id", "class_name", "r", "g", "b"], data=rows)
-    logger.experiment.log({"class_legend": table}, step=step)
+    _log_wandb_payload(logger, {"class_legend": table}, step=step)
 
 
 def segmented_pointcloud_to_object3d(payload: dict):
@@ -309,12 +346,10 @@ def log_audit_pointclouds(
         )
         with torch.inference_mode():
             prediction = model.predict_segmented_pointcloud(point_frame=point_frame, range_frame=range_frame)
-        name = f"{source.split}/pointcloud_{example_idx}"
-        if prefix:
-            name = f"{prefix}_{name}"
+        name = pointcloud_section_key(source.split, f"pointcloud_{example_idx}", prefix=prefix)
         payload[name] = segmented_pointcloud_to_object3d(prediction)
     if payload:
-        logger.experiment.log(payload, step=step)
+        _log_wandb_payload(logger, payload, step=step)
 
 
 def log_cached_audit_pointclouds(
@@ -333,12 +368,10 @@ def log_cached_audit_pointclouds(
         prediction = cached_predictions.get(_example_key(example.segment, example.timestamp))
         if prediction is None:
             continue
-        name = f"{source.split}/pointcloud_{example_idx}"
-        if prefix:
-            name = f"{prefix}_{name}"
+        name = pointcloud_section_key(source.split, f"pointcloud_{example_idx}", prefix=prefix)
         payload[name] = segmented_pointcloud_to_object3d(prediction)
     if payload:
-        logger.experiment.log(payload, step=step)
+        _log_wandb_payload(logger, payload, step=step)
 
 
 def cache_audit_predictions_from_stage_batch(
@@ -476,7 +509,7 @@ class WandbSegmentationCallback(Callback):
             return
         log_confusion_matrix_to_wandb(
             trainer.logger,
-            stage="train",
+            key=confusion_matrix_section_key("train"),
             confusion_matrix=pl_module.get_confusion_matrix("train").detach().cpu().numpy(),
             class_names=pl_module.class_names,
             step=trainer.global_step,
@@ -495,7 +528,7 @@ class WandbSegmentationCallback(Callback):
             return
         log_confusion_matrix_to_wandb(
             trainer.logger,
-            stage="val",
+            key=confusion_matrix_section_key("val"),
             confusion_matrix=pl_module.get_confusion_matrix("val").detach().cpu().numpy(),
             class_names=pl_module.class_names,
             step=trainer.global_step,
