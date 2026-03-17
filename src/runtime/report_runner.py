@@ -5,7 +5,7 @@ import torch
 from tqdm.auto import tqdm
 
 from ..data import WaymoLidarDataModule
-from .common import resolve_runtime_device
+from .common import final_confusion_matrix_key, resolve_runtime_device
 from .stage_eval import StageReportAccumulator
 
 
@@ -107,12 +107,13 @@ def evaluate_and_log_splits(
     device: torch.device,
     class_names: list[str],
     step: int,
-    prefix: str | None = None,
+    epoch: int | None = None,
     max_batches: int = 0,
     audit_pointcloud_count: int = 0,
 ) -> None:
-    from .wandb_logging import build_audit_source, log_cached_audit_pointclouds, log_stage_report_to_wandb
+    from .wandb_logging import build_audit_source, log_cached_audit_pointclouds, log_confusion_matrix_to_wandb, log_final_evaluation_tables_to_wandb
 
+    stage_payloads: dict[str, dict] = {}
     for stage in splits:
         audit_source = build_audit_source(datamodule, split=stage, count=int(audit_pointcloud_count))
         stage_payload, cached_predictions = evaluate_split(
@@ -123,18 +124,36 @@ def evaluate_and_log_splits(
             max_batches=max_batches,
             audit_source=audit_source,
         )
-        log_stage_report_to_wandb(
-            logger,
-            stage=stage,
-            stage_payload=stage_payload,
-            class_names=class_names,
-            step=step,
-            prefix=prefix,
-        )
+        stage_payloads[str(stage)] = stage_payload
+        confusion = stage_payload.get("confusion_matrix")
+        if confusion is not None:
+            display_stage = {
+                "train": "Train",
+                "val": "Validation",
+                "test": "Test",
+            }.get(str(stage), str(stage).title())
+            log_confusion_matrix_to_wandb(
+                logger,
+                key=final_confusion_matrix_key(stage),
+                confusion_matrix=torch.as_tensor(confusion).cpu().numpy(),
+                class_names=class_names,
+                step=step,
+                title=f"Final {display_stage} confusion matrix",
+                epoch=epoch,
+            )
         log_cached_audit_pointclouds(
             logger,
             audit_source,
             cached_predictions,
             step=step,
-            prefix=prefix,
+            epoch=epoch,
+            final=True,
+        )
+    if stage_payloads:
+        log_final_evaluation_tables_to_wandb(
+            logger,
+            stage_payloads=stage_payloads,
+            class_names=class_names,
+            step=step,
+            epoch=epoch,
         )

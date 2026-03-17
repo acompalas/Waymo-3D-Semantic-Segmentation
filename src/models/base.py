@@ -4,7 +4,7 @@ import lightning as L
 import numpy as np
 import torch
 
-from ..runtime.common import confusion_family_section_key, loss_accuracy_section_key, sanitize_metric_name
+from ..runtime.common import live_metric_key, per_class_metric_key, sanitize_metric_name
 from ..runtime.metrics import confusion_metrics_from_confusion_matrix, empty_confusion_matrix
 from ..runtime.stage_eval import consume_stage_output, stage_output_metric_weight, validate_stage_output
 
@@ -79,21 +79,37 @@ class SegmentationLightningModule(L.LightningModule):
     def get_confusion_matrix(self, stage: str) -> torch.Tensor:
         return self._confmat_for_stage(stage).detach().clone()
 
+    def _log_trainer_epoch(self, stage: str) -> None:
+        self.log(
+            "trainer/epoch",
+            float(self.current_epoch),
+            on_step=(stage == "train"),
+            on_epoch=(stage != "train"),
+            prog_bar=False,
+            logger=True,
+            batch_size=1,
+        )
+
     def _log_confusion_metrics(self, stage: str) -> None:
         if not self._stage_has_predictions[stage]:
             return
         metrics = confusion_metrics_from_confusion_matrix(self._confmat_for_stage(stage), ignore_class_zero=True)
-        self.log(f"{stage}_mIoU", metrics["miou"], on_step=False, on_epoch=True, prog_bar=True)
-        self.log(confusion_family_section_key(stage, "iou", "mIoU"), metrics["miou"], on_step=False, on_epoch=True, prog_bar=False)
         self.log(
-            confusion_family_section_key(stage, "precision", "mean_precision"),
+            live_metric_key(stage, "miou"),
+            metrics["miou"],
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+        )
+        self.log(
+            live_metric_key(stage, "macro_precision"),
             metrics["mean_precision"],
             on_step=False,
             on_epoch=True,
             prog_bar=False,
         )
         self.log(
-            confusion_family_section_key(stage, "recall", "mean_recall"),
+            live_metric_key(stage, "macro_recall"),
             metrics["mean_recall"],
             on_step=False,
             on_epoch=True,
@@ -103,23 +119,22 @@ class SegmentationLightningModule(L.LightningModule):
             if cls_idx == 0:
                 continue
             metric_name = self._class_metric_names[cls_idx]
-            self.log(f"{stage}_IoU_{metric_name}", cls_iou, on_step=False, on_epoch=True, prog_bar=False)
             self.log(
-                confusion_family_section_key(stage, "iou", metric_name),
+                per_class_metric_key(stage, "iou", metric_name),
                 cls_iou,
                 on_step=False,
                 on_epoch=True,
                 prog_bar=False,
             )
             self.log(
-                confusion_family_section_key(stage, "precision", metric_name),
+                per_class_metric_key(stage, "precision", metric_name),
                 metrics["per_class_precision"][cls_idx],
                 on_step=False,
                 on_epoch=True,
                 prog_bar=False,
             )
             self.log(
-                confusion_family_section_key(stage, "recall", metric_name),
+                per_class_metric_key(stage, "recall", metric_name),
                 metrics["per_class_recall"][cls_idx],
                 on_step=False,
                 on_epoch=True,
@@ -128,28 +143,37 @@ class SegmentationLightningModule(L.LightningModule):
 
     def _consume_and_log_stage_output(self, stage: str, output: dict[str, Any]) -> torch.Tensor:
         output = validate_stage_output(output)
+        self._log_trainer_epoch(stage)
         loss = output["loss"]
         metric_weight = stage_output_metric_weight(output)
         log_weight = max(1, metric_weight)
-        self.log(f"{stage}_loss", loss, on_step=(stage == "train"), on_epoch=True, prog_bar=True, batch_size=log_weight)
-        self.log(
-            loss_accuracy_section_key(stage, "loss"),
-            loss,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
-            batch_size=log_weight,
-        )
+        if stage == "train":
+            self.log(
+                live_metric_key(stage, "loss_step"),
+                loss,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=True,
+                batch_size=log_weight,
+            )
+        else:
+            self.log(
+                live_metric_key(stage, "loss"),
+                loss,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=(stage == "val"),
+                batch_size=log_weight,
+            )
         acc = consume_stage_output(self._confmat_for_stage(stage), output, num_classes=self._metric_num_classes)
         if acc is not None and metric_weight > 0:
             self._stage_has_predictions[stage] = True
-            self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=metric_weight)
             self.log(
-                loss_accuracy_section_key(stage, "accuracy"),
+                live_metric_key(stage, "accuracy"),
                 acc,
                 on_step=False,
                 on_epoch=True,
-                prog_bar=False,
+                prog_bar=(stage == "val"),
                 batch_size=metric_weight,
             )
         return loss

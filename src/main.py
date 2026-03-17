@@ -329,14 +329,15 @@ def run_train(args: argparse.Namespace) -> None:
     run_dir = Path(logger.save_dir) / selection.model_id / str(getattr(logger, "version", "run"))
     checkpoint_cb = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
-        monitor="val_mIoU",
+        monitor="valid_metrics/valid_miou",
         mode="max",
         save_top_k=1,
         save_last=True,
-        filename="best-{epoch:02d}-{val_mIoU:.4f}",
+        filename="best-{epoch:02d}-{valid_metrics/valid_miou:.4f}",
+        auto_insert_metric_name=False,
     )
     early_stopping_cb = EarlyStopping(
-        monitor="val_mIoU",
+        monitor="valid_metrics/valid_miou",
         mode="max",
         patience=int(args.early_stopping_patience),
         min_delta=float(args.early_stopping_min_delta),
@@ -357,6 +358,7 @@ def run_train(args: argparse.Namespace) -> None:
     report_model = selection.load_from_checkpoint(checkpoint_path)
     report_device = resolve_runtime_device(args.accelerator)
     prepare_model_for_reporting(report_model, datamodule, report_device)
+    final_eval_epoch = max(0, int(trainer.current_epoch) - 1)
     evaluate_and_log_splits(
         logger,
         report_model,
@@ -365,7 +367,7 @@ def run_train(args: argparse.Namespace) -> None:
         device=report_device,
         class_names=report_model.class_names,
         step=trainer.global_step,
-        prefix="final",
+        epoch=final_eval_epoch,
         audit_pointcloud_count=int(args.log_pointcloud_count),
     )
     logger.experiment.finish()
@@ -391,7 +393,7 @@ def run_evaluate(args: argparse.Namespace) -> None:
         device=report_device,
         class_names=model.class_names,
         step=0,
-        prefix="eval",
+        epoch=0,
         max_batches=args.max_batches,
         audit_pointcloud_count=int(args.log_pointcloud_count),
     )
