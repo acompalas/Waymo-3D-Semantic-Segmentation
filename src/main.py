@@ -1,6 +1,5 @@
 import argparse
 from datetime import datetime
-import os
 from pathlib import Path
 import sys
 from typing import Iterable
@@ -26,25 +25,7 @@ from .runtime.wandb_logging import WandbSegmentationCallback, log_audit_pointclo
 from .tools import label_colors, render_point_cloud, save_gif
 
 
-COLAB_DRIVE_MOUNT = Path("/content/drive")
-
-
-def add_colab_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--colab",
-        action="store_true",
-        help="Enable Google Colab convenience setup for W&B auth and Drive mounting.",
-    )
-    parser.add_argument(
-        "--colab-drive-root",
-        type=Path,
-        default=Path("MyDrive/ece271b"),
-        help="Drive-relative root to resolve after mounting when --colab is enabled.",
-    )
-
-
 def add_common_train_args(parser: argparse.ArgumentParser) -> None:
-    add_colab_args(parser)
     parser.add_argument("--point-data-dir", type=Path, default=Path("data/preprocessed/point_clouds"))
     parser.add_argument("--range-data-dir", type=Path, default=Path("data/preprocessed/range_images"))
     parser.add_argument("--train-subdirs", type=str, default="training")
@@ -83,7 +64,6 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
-    add_colab_args(parser)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--point-data-dir", type=Path, default=Path("data/preprocessed/point_clouds"))
     parser.add_argument("--range-data-dir", type=Path, default=Path("data/preprocessed/range_images"))
@@ -109,7 +89,6 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_common_render_args(parser: argparse.ArgumentParser) -> None:
-    add_colab_args(parser)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--point-data-dir", type=Path, default=Path("data/preprocessed/point_clouds"))
     parser.add_argument("--range-data-dir", type=Path, default=Path("data/preprocessed/range_images"))
@@ -183,33 +162,6 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
 
 def selection_for(args: argparse.Namespace):
     return get_model_selection(args.representation, args.backbone, args.behavior)
-
-
-def maybe_setup_colab(args: argparse.Namespace) -> None:
-    if not bool(getattr(args, "colab", False)):
-        return
-
-    try:
-        from google.colab import drive
-
-        try:
-            from google.colab import userdata
-        except ImportError:
-            userdata = None
-
-        if userdata is not None and "WANDB_API_KEY" not in os.environ:
-            wandb_api_key = userdata.get("WANDB")
-            if wandb_api_key:
-                os.environ["WANDB_API_KEY"] = str(wandb_api_key)
-
-        COLAB_DRIVE_MOUNT.mkdir(parents=True, exist_ok=True)
-        drive.mount(str(COLAB_DRIVE_MOUNT))
-
-        drive_root = (COLAB_DRIVE_MOUNT / args.colab_drive_root).resolve()
-        setattr(args, "colab_drive_root_path", drive_root)
-        print(f"Resolved Colab drive root: {drive_root}")
-    except Exception as exc:
-        print(f"Warning: Colab setup skipped: {exc}", file=sys.stderr)
 
 
 def point_data_dir_for(args: argparse.Namespace) -> Path:
@@ -534,7 +486,6 @@ def run_render(args: argparse.Namespace) -> None:
 
 def main(argv: Iterable[str] | None = None) -> None:
     args = parse_args(argv)
-    maybe_setup_colab(args)
     if args.command == "train":
         run_train(args)
     elif args.command == "evaluate":
