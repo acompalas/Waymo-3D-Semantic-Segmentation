@@ -314,8 +314,8 @@ class DataAndModelTests(unittest.TestCase):
 
     def test_handcrafted_backbone_uses_shared_head(self) -> None:
         model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
-        self.assertEqual(model.head.net[-1].out_features, 23)
-        self.assertEqual(model.backbone.output_dim, model.head.net[1].in_features)
+        self.assertEqual(model.head.linear.out_features, 23)
+        self.assertEqual(model.backbone.output_dim, model.head.linear.in_features)
         self.assertIsInstance(model.backbone.post_mlp, torch.nn.Identity)
 
         projected = PointCloudTaskModel(
@@ -327,7 +327,7 @@ class DataAndModelTests(unittest.TestCase):
             dropout=0.1,
         )
         self.assertEqual(projected.backbone.output_dim, 64)
-        self.assertEqual(projected.head.net[1].in_features, 64)
+        self.assertEqual(projected.head.linear.in_features, 64)
         self.assertFalse(isinstance(projected.backbone.post_mlp, torch.nn.Identity))
 
     def test_geometry_only_switches_selected_input_dimensions(self) -> None:

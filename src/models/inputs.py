@@ -26,13 +26,6 @@ def select_point_model_inputs(
     return torch.cat([points, point_features], dim=-1)
 
 
-def select_point_features_for_extractor(point_features: torch.Tensor, *, geometry_only: bool) -> torch.Tensor:
-    point_features = point_features.float()
-    if bool(geometry_only):
-        return torch.zeros_like(point_features)
-    return point_features
-
-
 def point_geometry(model_inputs: torch.Tensor) -> torch.Tensor:
     return model_inputs[..., :3].float()
 

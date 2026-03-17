@@ -78,6 +78,11 @@ class EndToEndSmokeTests(unittest.TestCase):
             max_cached_segments=1,
         )
 
+    def _latest_hparams(self) -> dict:
+        logger = FakeWandbLogger.instances[-1]
+        self.assertTrue(logger.experiment.hparams)
+        return logger.experiment.hparams[-1]
+
     def test_checkpoint_round_trip_for_representative_models(self) -> None:
         configs = [
             (
@@ -311,6 +316,13 @@ class EndToEndSmokeTests(unittest.TestCase):
         self.assertGreaterEqual(load_mock.call_count, 1)
         logger = FakeWandbLogger.instances[-1]
         self.assertRegex(logger.name, r"^point_clouds-handcrafted-\d{8}-\d{6}$")
+        hparams = self._latest_hparams()
+        self.assertEqual(hparams["representation"], "point_clouds")
+        self.assertEqual(hparams["behavior"], "direct")
+        self.assertEqual(hparams["backbone"], "handcrafted")
+        self.assertEqual(hparams["point_data_dir"], str(self.point_root))
+        self.assertEqual(hparams["knn_scales"], "2")
+        self.assertEqual(hparams["knn_query_chunk"], 8)
         logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
         self.assertIn("train/confusion_matrix", logged_keys)
         self.assertIn("val/confusion_matrix", logged_keys)
@@ -369,6 +381,10 @@ class EndToEndSmokeTests(unittest.TestCase):
             )
         logger = FakeWandbLogger.instances[-1]
         self.assertRegex(logger.name, r"^point_clouds-handcrafted-\d{8}-\d{6}$")
+        hparams = self._latest_hparams()
+        self.assertEqual(hparams["representation"], "point_clouds")
+        self.assertEqual(hparams["auto_evaluate"], False)
+        self.assertEqual(hparams["behavior"], "direct")
         logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
         self.assertNotIn("final_test/confusion_matrix", logged_keys)
         self.assertTrue(logger.experiment.finished)
@@ -413,6 +429,11 @@ class EndToEndSmokeTests(unittest.TestCase):
             )
         logger = FakeWandbLogger.instances[-1]
         self.assertRegex(logger.name, r"^point_clouds-handcrafted-\d{8}-\d{6}$")
+        hparams = self._latest_hparams()
+        self.assertEqual(hparams["representation"], "point_clouds")
+        self.assertEqual(hparams["splits"], "test")
+        self.assertEqual(hparams["max_batches"], 1)
+        self.assertEqual(hparams["backbone"], "handcrafted")
         logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
         self.assertIn("eval_test/confusion_matrix", logged_keys)
         self.assertTrue(any(key.startswith("eval_test/pointcloud_") for key in logged_keys))

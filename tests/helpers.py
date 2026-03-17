@@ -73,6 +73,9 @@ class FakeWandbLogger(CSVLogger):
     def experiment(self) -> FakeWandbRun:
         return self._experiment
 
+    def log_hyperparams(self, params) -> None:
+        self._experiment.log_hparams(dict(params))
+
 
 class FakeWandbModule:
     Table = FakeWandbTable

@@ -1,7 +1,13 @@
 import unittest
 from unittest.mock import patch
 
-from src.main import _default_wandb_run_name, _generate_wandb_run_id, _wandb_name_timestamp, parse_args
+from src.main import (
+    _default_wandb_run_name,
+    _generate_wandb_run_id,
+    _wandb_name_timestamp,
+    build_cli_hparams_payload,
+    parse_args,
+)
 from src.runtime import backbone_choices, get_model_selection, representation_choices
 
 
@@ -127,6 +133,32 @@ class RegistryCliTests(unittest.TestCase):
     def test_selection_builds_composite_model_id(self) -> None:
         selection = get_model_selection("point_clouds", "edgeconv", "direct")
         self.assertEqual(selection.model_id, "point_clouds__edgeconv__direct")
+
+    def test_cli_hparams_payload_includes_cli_defaults(self) -> None:
+        args = parse_args(
+            [
+                "train",
+                "--representation",
+                "point_clouds",
+                "--behavior",
+                "direct",
+                "--backbone",
+                "pointnet",
+                "--no-auto-evaluate",
+            ]
+        )
+        payload = build_cli_hparams_payload(args)
+
+        self.assertEqual(payload["representation"], "point_clouds")
+        self.assertEqual(payload["behavior"], "direct")
+        self.assertEqual(payload["backbone"], "pointnet")
+        self.assertEqual(payload["point_data_dir"], "data/preprocessed/point_clouds")
+        self.assertEqual(payload["range_data_dir"], "data/preprocessed/range_images")
+        self.assertEqual(payload["class_weight_alpha"], 1.0)
+        self.assertEqual(payload["focal_loss_gamma"], 0.0)
+        self.assertEqual(payload["hidden_dim"], 256)
+        self.assertEqual(payload["depth"], 6)
+        self.assertEqual(payload["dropout"], 0.1)
 
     def test_default_wandb_run_name_uses_representation_backbone_and_timestamp(self) -> None:
         selection = get_model_selection("point_clouds", "edgeconv", "direct")

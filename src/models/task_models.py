@@ -5,9 +5,19 @@ from .backbones.point.registry import build_point_backbone
 from .backbones.range.registry import build_range_backbone
 from .behaviors import DiffusionBehavior, build_behavior
 from .diffusion import labels_to_soft_points, labels_to_soft_range
-from .heads import PointMLPHead, RangeConvHead
+from .heads import PointHead, RangeHead
 from .inputs import point_geometry, point_input_dim, range_input_channels, select_point_model_inputs, select_range_model_inputs
 from .losses import focal_cross_entropy_loss
+
+
+def _resolve_class_weight_alpha(class_weight_alpha: float, use_balanced_class_weights: bool | None) -> float:
+    if use_balanced_class_weights is None:
+        return float(class_weight_alpha)
+    return float(class_weight_alpha if use_balanced_class_weights else 0.0)
+
+
+def _clean_backbone_kwargs(backbone_kwargs: dict) -> dict:
+    return {key: value for key, value in backbone_kwargs.items() if value is not None}
 
 
 class PointCloudTaskModel(PointCloudSegmentationModel):
@@ -18,32 +28,33 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         weight_decay: float = 1e-4,
         backbone: str = "edgeconv",
         behavior: str = "direct",
-        hidden_dim: int | None = None,
-        depth: int | None = None,
-        knn_k: int = 16,
-        dropout: float | None = None,
         diffusion_steps: int = 1000,
         class_weight_alpha: float = 1.0,
         focal_loss_gamma: float = 0.0,
         geometry_only: bool = False,
-        knn_scales: tuple[int, ...] = (16, 32, 64),
-        knn_query_chunk: int = 4096,
         use_balanced_class_weights: bool | None = None,
+        **backbone_kwargs,
     ) -> None:
         super().__init__(num_classes=num_classes)
-        if use_balanced_class_weights is not None:
-            class_weight_alpha = float(class_weight_alpha if use_balanced_class_weights else 0.0)
+        class_weight_alpha = _resolve_class_weight_alpha(class_weight_alpha, use_balanced_class_weights)
         backbone_name = str(backbone)
-        if backbone_name == "handcrafted":
-            hidden_dim = 0 if hidden_dim is None else int(hidden_dim)
-            depth = 0 if depth is None else int(depth)
-            dropout = 0.0 if dropout is None else float(dropout)
-        else:
-            hidden_dim = 256 if hidden_dim is None else int(hidden_dim)
-            depth = 6 if depth is None else int(depth)
-            dropout = 0.1 if dropout is None else float(dropout)
-        self.save_hyperparameters(ignore=["use_balanced_class_weights"])
-        self.behavior_impl = build_behavior(behavior, diffusion_steps=int(diffusion_steps))
+        behavior_name = str(behavior)
+        backbone_kwargs = _clean_backbone_kwargs(dict(backbone_kwargs))
+        self.save_hyperparameters(
+            {
+                "num_classes": int(num_classes),
+                "learning_rate": float(learning_rate),
+                "weight_decay": float(weight_decay),
+                "backbone": backbone_name,
+                "behavior": behavior_name,
+                "diffusion_steps": int(diffusion_steps),
+                "class_weight_alpha": float(class_weight_alpha),
+                "focal_loss_gamma": float(focal_loss_gamma),
+                "geometry_only": bool(geometry_only),
+                **backbone_kwargs,
+            }
+        )
+        self.behavior_impl = build_behavior(behavior_name, diffusion_steps=int(diffusion_steps))
         model_input_dim = point_input_dim(geometry_only=bool(geometry_only))
         backbone_input_dim = self.behavior_impl.point_backbone_input_dim(
             point_input_dim=model_input_dim,
@@ -52,15 +63,10 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         self.backbone = build_point_backbone(
             backbone_name,
             input_dim=backbone_input_dim,
-            hidden_dim=hidden_dim,
-            depth=depth,
-            dropout=dropout,
-            knn_k=int(knn_k),
             time_dim=self.behavior_impl.time_dim,
-            knn_scales=tuple(int(k) for k in knn_scales),
-            knn_query_chunk=int(knn_query_chunk),
+            **backbone_kwargs,
         )
-        self.head = PointMLPHead(input_dim=int(self.backbone.output_dim), output_dim=int(num_classes))
+        self.head = PointHead(input_dim=int(self.backbone.output_dim), output_dim=int(num_classes))
 
     def prepare_runtime(self) -> None:
         self.behavior_impl.prepare_runtime(self)
@@ -190,30 +196,41 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         weight_decay: float = 1e-4,
         backbone: str = "unet",
         behavior: str = "direct",
-        base_channels: int = 32,
-        depth: int = 4,
-        dropout: float = 0.0,
         diffusion_steps: int = 1000,
         class_weight_alpha: float = 1.0,
         focal_loss_gamma: float = 0.0,
         geometry_only: bool = False,
         use_balanced_class_weights: bool | None = None,
+        **backbone_kwargs,
     ) -> None:
         super().__init__(num_classes=num_classes)
-        if use_balanced_class_weights is not None:
-            class_weight_alpha = float(class_weight_alpha if use_balanced_class_weights else 0.0)
+        class_weight_alpha = _resolve_class_weight_alpha(class_weight_alpha, use_balanced_class_weights)
+        backbone_name = str(backbone)
+        behavior_name = str(behavior)
+        backbone_kwargs = _clean_backbone_kwargs(dict(backbone_kwargs))
         input_channels = range_input_channels(geometry_only=bool(geometry_only))
-        self.save_hyperparameters(ignore=["use_balanced_class_weights"])
-        self.behavior_impl = build_behavior(behavior, diffusion_steps=int(diffusion_steps))
+        self.save_hyperparameters(
+            {
+                "num_classes": int(num_classes),
+                "learning_rate": float(learning_rate),
+                "weight_decay": float(weight_decay),
+                "backbone": backbone_name,
+                "behavior": behavior_name,
+                "diffusion_steps": int(diffusion_steps),
+                "class_weight_alpha": float(class_weight_alpha),
+                "focal_loss_gamma": float(focal_loss_gamma),
+                "geometry_only": bool(geometry_only),
+                **backbone_kwargs,
+            }
+        )
+        self.behavior_impl = build_behavior(behavior_name, diffusion_steps=int(diffusion_steps))
         self.backbone = build_range_backbone(
-            str(backbone),
+            backbone_name,
             input_channels=int(input_channels),
             num_classes=int(num_classes),
-            base_channels=int(base_channels),
-            depth=int(depth),
-            dropout=float(dropout),
+            **backbone_kwargs,
         )
-        self.head = RangeConvHead(
+        self.head = RangeHead(
             input_channels=int(self.backbone.output_channels),
             output_channels=int(num_classes),
         )
