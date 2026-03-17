@@ -45,6 +45,7 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--early-stopping-patience", type=int, default=2)
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     parser.add_argument("--train-segment-fraction", type=float, default=1.0)
+    parser.add_argument("--train-frame-fraction", type=float, default=1.0)
     parser.add_argument("--max-cached-segments", type=int, default=2)
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=str, default="auto")
@@ -269,6 +270,7 @@ def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
         worker_start_method=args.worker_start_method,
         class_weight_alpha=float(getattr(args, "class_weight_alpha", 1.0)),
         train_segment_fraction=getattr(args, "train_segment_fraction", 1.0),
+        train_frame_fraction=getattr(args, "train_frame_fraction", 1.0),
         val_samples_per_segment=int(val_samples_per_segment),
     )
 

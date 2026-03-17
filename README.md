@@ -154,6 +154,7 @@ These are required for every command.
 | `--early-stopping-patience` | early stopping patience in epochs | `2` |
 | `--early-stopping-min-delta` | minimum improvement for early stopping | `0.0` |
 | `--train-segment-fraction` | fraction of train segments to keep | `1.0` |
+| `--train-frame-fraction` | fraction of frames to keep within each selected train segment; values in `[0, 1]`, with at least one frame kept per segment | `1.0` |
 | `--max-cached-segments` | segment cache size inside dataset loaders | `2` |
 | `--accelerator` | Lightning accelerator setting | `"auto"` |
 | `--devices` | Lightning device setting | `"auto"` |

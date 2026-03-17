@@ -91,6 +91,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
         worker_start_method: str = "spawn",
         class_weight_alpha: float = 1.0,
         train_segment_fraction: float = 1.0,
+        train_frame_fraction: float = 1.0,
         val_samples_per_segment: int = 0,
     ) -> None:
         super().__init__()
@@ -112,11 +113,14 @@ class WaymoLidarDataModule(L.LightningDataModule):
         self.worker_start_method = str(worker_start_method)
         self.class_weight_alpha = float(class_weight_alpha)
         self.train_segment_fraction = float(train_segment_fraction)
+        self.train_frame_fraction = float(train_frame_fraction)
         self.val_samples_per_segment = int(val_samples_per_segment)
         if self.class_weight_alpha < 0.0:
             raise ValueError(f"class_weight_alpha must be >= 0, got {self.class_weight_alpha}")
         if not (0.0 < self.train_segment_fraction <= 1.0):
             raise ValueError(f"train_segment_fraction must be in (0, 1], got {self.train_segment_fraction}")
+        if not (0.0 <= self.train_frame_fraction <= 1.0):
+            raise ValueError(f"train_frame_fraction must be in [0, 1], got {self.train_frame_fraction}")
         if self.val_samples_per_segment < 0:
             raise ValueError(f"val_samples_per_segment must be >= 0, got {self.val_samples_per_segment}")
 
@@ -153,6 +157,21 @@ class WaymoLidarDataModule(L.LightningDataModule):
         rng = np.random.default_rng(self.seed + 17)
         order = rng.permutation(np.array(values, dtype=object))
         return sorted(str(x) for x in order[:keep].tolist())
+
+    def _select_evenly_spaced_frames(
+        self,
+        segment_frames: Sequence[tuple[int, int]],
+        *,
+        take: int,
+    ) -> list[tuple[int, int]]:
+        values = list(segment_frames)
+        if take <= 0 or not values:
+            return []
+        take = min(len(values), int(take))
+        if take >= len(values):
+            return values
+        indices = np.linspace(0, len(values) - 1, num=take, dtype=int).tolist()
+        return [values[idx] for idx in indices]
 
     def _make_dataset(
         self,
@@ -250,12 +269,26 @@ class WaymoLidarDataModule(L.LightningDataModule):
             segment_frames = list(dataset.frames_for_segment(segment))
             if not segment_frames:
                 continue
-            take = min(len(segment_frames), int(samples_per_segment))
-            if take >= len(segment_frames):
-                chosen = segment_frames
-            else:
-                indices = np.linspace(0, len(segment_frames) - 1, num=take, dtype=int).tolist()
-                chosen = [segment_frames[idx] for idx in indices]
+            chosen = self._select_evenly_spaced_frames(segment_frames, take=int(samples_per_segment))
+            if not chosen:
+                continue
+            selected.extend((str(segment), int(frame_idx), int(timestamp)) for frame_idx, timestamp in chosen)
+        return selected
+
+    def _subset_train_frames(
+        self,
+        dataset: PreprocessedPointCloudDataset | PreprocessedRangeImageDataset,
+    ) -> list[tuple[str, int, int]]:
+        if self.train_frame_fraction >= 1.0:
+            return list(dataset._frames)
+
+        selected: list[tuple[str, int, int]] = []
+        for segment in dataset.segment_names:
+            segment_frames = list(dataset.frames_for_segment(segment))
+            if not segment_frames:
+                continue
+            take = max(1, int(np.ceil(len(segment_frames) * self.train_frame_fraction)))
+            chosen = self._select_evenly_spaced_frames(segment_frames, take=take)
             selected.extend((str(segment), int(frame_idx), int(timestamp)) for frame_idx, timestamp in chosen)
         return selected
 
@@ -302,6 +335,9 @@ class WaymoLidarDataModule(L.LightningDataModule):
                     seed=self.seed + 1,
                     deterministic_sampling=True,
                 )
+
+            if self.train_dataset is not None:
+                self.train_dataset._set_frames(self._subset_train_frames(self.train_dataset))
 
             if self.train_dataset is not None and hasattr(self.train_dataset, "compute_class_counts"):
                 counts = self.train_dataset.compute_class_counts(self.num_classes)
@@ -428,6 +464,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
                 seed=self.seed + 301,
                 deterministic_sampling=True,
             )
+            dataset._set_frames(list(self.train_dataset._frames))
             sampler = SceneShuffleBatchSampler(
                 records=dataset.records,
                 batch_size=self.batch_size,
