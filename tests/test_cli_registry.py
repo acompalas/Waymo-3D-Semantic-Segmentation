@@ -30,6 +30,10 @@ class RegistryCliTests(unittest.TestCase):
                 "--geometry-only",
                 "--weight-decay",
                 "0.01",
+                "--class-weight-alpha",
+                "0.5",
+                "--focal-loss-gamma",
+                "2.0",
                 "--no-auto-evaluate",
             ]
         )
@@ -43,6 +47,8 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(args.val_samples_per_segment, 3)
         self.assertEqual(args.log_pointcloud_count, 4)
         self.assertEqual(args.weight_decay, 0.01)
+        self.assertEqual(args.class_weight_alpha, 0.5)
+        self.assertEqual(args.focal_loss_gamma, 2.0)
         self.assertTrue(args.geometry_only)
 
     def test_point_diffusion_parser_adds_behavior_args(self) -> None:

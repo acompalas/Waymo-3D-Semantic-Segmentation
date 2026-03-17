@@ -1,5 +1,4 @@
 import torch
-import torch.nn.functional as F
 
 from .base import PointCloudSegmentationModel, RangeImageSegmentationModel
 from .backbones.point.registry import build_point_backbone
@@ -8,6 +7,7 @@ from .behaviors import DiffusionBehavior, build_behavior
 from .diffusion import labels_to_soft_points, labels_to_soft_range
 from .heads import PointMLPHead, RangeConvHead
 from .inputs import point_geometry, point_input_dim, range_input_channels, select_point_model_inputs, select_range_model_inputs
+from .losses import focal_cross_entropy_loss
 
 
 class PointCloudTaskModel(PointCloudSegmentationModel):
@@ -23,15 +23,16 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         knn_k: int = 16,
         dropout: float | None = None,
         diffusion_steps: int = 1000,
-        use_balanced_class_weights: bool = True,
+        class_weight_alpha: float = 1.0,
+        focal_loss_gamma: float = 0.0,
         geometry_only: bool = False,
         knn_scales: tuple[int, ...] = (16, 32, 64),
         knn_query_chunk: int = 4096,
+        use_balanced_class_weights: bool | None = None,
     ) -> None:
-        super().__init__(
-            num_classes=num_classes,
-            use_balanced_class_weights=use_balanced_class_weights,
-        )
+        super().__init__(num_classes=num_classes)
+        if use_balanced_class_weights is not None:
+            class_weight_alpha = float(class_weight_alpha if use_balanced_class_weights else 0.0)
         backbone_name = str(backbone)
         if backbone_name == "handcrafted":
             hidden_dim = 0 if hidden_dim is None else int(hidden_dim)
@@ -41,7 +42,7 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
             hidden_dim = 256 if hidden_dim is None else int(hidden_dim)
             depth = 6 if depth is None else int(depth)
             dropout = 0.1 if dropout is None else float(dropout)
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["use_balanced_class_weights"])
         self.behavior_impl = build_behavior(behavior, diffusion_steps=int(diffusion_steps))
         model_input_dim = point_input_dim(geometry_only=bool(geometry_only))
         backbone_input_dim = self.behavior_impl.point_backbone_input_dim(
@@ -126,7 +127,14 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
 
         target = labels.clone()
         target[~valid_label] = -100
-        loss = F.cross_entropy(logits.transpose(1, 2), target, weight=self.class_weights, ignore_index=-100)
+        loss = focal_cross_entropy_loss(
+            logits.transpose(1, 2),
+            target,
+            class_weights=self.class_weights,
+            gamma=float(self.hparams.focal_loss_gamma),
+            ignore_index=-100,
+            class_dim=1,
+        )
         return {
             "loss": loss,
             "preds": torch.where(valid_geometry, preds, torch.zeros_like(preds)),
@@ -186,15 +194,16 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
         depth: int = 4,
         dropout: float = 0.0,
         diffusion_steps: int = 1000,
-        use_balanced_class_weights: bool = True,
+        class_weight_alpha: float = 1.0,
+        focal_loss_gamma: float = 0.0,
         geometry_only: bool = False,
+        use_balanced_class_weights: bool | None = None,
     ) -> None:
-        super().__init__(
-            num_classes=num_classes,
-            use_balanced_class_weights=use_balanced_class_weights,
-        )
+        super().__init__(num_classes=num_classes)
+        if use_balanced_class_weights is not None:
+            class_weight_alpha = float(class_weight_alpha if use_balanced_class_weights else 0.0)
         input_channels = range_input_channels(geometry_only=bool(geometry_only))
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["use_balanced_class_weights"])
         self.behavior_impl = build_behavior(behavior, diffusion_steps=int(diffusion_steps))
         self.backbone = build_range_backbone(
             str(backbone),
@@ -267,7 +276,14 @@ class RangeImageTaskModel(RangeImageSegmentationModel):
 
         target = labels.clone()
         target[~valid] = -100
-        loss = F.cross_entropy(logits, target, weight=self.class_weights, ignore_index=-100)
+        loss = focal_cross_entropy_loss(
+            logits,
+            target,
+            class_weights=self.class_weights,
+            gamma=float(self.hparams.focal_loss_gamma),
+            ignore_index=-100,
+            class_dim=1,
+        )
         return {
             "loss": loss,
             "preds": preds,

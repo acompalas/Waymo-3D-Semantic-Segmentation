@@ -40,7 +40,8 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-epochs", type=int, default=20)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
-    parser.add_argument("--no-balanced-class-weights", action="store_true")
+    parser.add_argument("--class-weight-alpha", type=float, default=1.0)
+    parser.add_argument("--focal-loss-gamma", type=float, default=0.0)
     parser.add_argument("--early-stopping-patience", type=int, default=2)
     parser.add_argument("--early-stopping-min-delta", type=float, default=0.0)
     parser.add_argument("--train-segment-fraction", type=float, default=1.0)
@@ -241,7 +242,7 @@ def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
         max_cached_segments=getattr(args, "max_cached_segments", 2),
         seed=args.seed,
         worker_start_method=args.worker_start_method,
-        balanced_weights=not bool(getattr(args, "no_balanced_class_weights", False)),
+        class_weight_alpha=float(getattr(args, "class_weight_alpha", 1.0)),
         train_segment_fraction=getattr(args, "train_segment_fraction", 1.0),
         val_samples_per_segment=int(val_samples_per_segment),
     )

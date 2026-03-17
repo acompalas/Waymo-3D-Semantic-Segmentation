@@ -21,12 +21,9 @@ class SegmentationLightningModule(L.LightningModule):
     def __init__(
         self,
         num_classes: int,
-        *,
-        use_balanced_class_weights: bool = True,
     ) -> None:
         super().__init__()
         self._metric_num_classes = int(num_classes)
-        self._use_balanced_class_weights = bool(use_balanced_class_weights)
         self.register_buffer("_class_weights", torch.ones(self._metric_num_classes, dtype=torch.float32), persistent=False)
         self.register_buffer("_train_confmat", empty_confusion_matrix(self._metric_num_classes), persistent=False)
         self.register_buffer("_val_confmat", empty_confusion_matrix(self._metric_num_classes), persistent=False)
@@ -38,7 +35,7 @@ class SegmentationLightningModule(L.LightningModule):
 
     @property
     def class_weights(self) -> Optional[torch.Tensor]:
-        if not self._use_balanced_class_weights or not self._weights_ready:
+        if not self._weights_ready:
             return None
         return self._class_weights
 
@@ -165,7 +162,7 @@ class SegmentationLightningModule(L.LightningModule):
     def on_fit_start(self) -> None:
         dm = self.trainer.datamodule
         weights = getattr(dm, "class_weights", None) if dm is not None else None
-        if self._use_balanced_class_weights and weights is not None:
+        if weights is not None:
             self.set_class_weights(weights.to(self.device))
         class_names = getattr(dm, "class_names", None) if dm is not None else None
         if class_names is not None:

@@ -6,6 +6,8 @@ from unittest.mock import patch
 import torch
 
 from src.data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
+from src.data.datamodule import balanced_class_weights
+from src.models.losses import focal_cross_entropy_loss
 from src.models import PointCloudTaskModel, RangeImageTaskModel
 from tests.helpers import build_synthetic_preprocessed_roots
 
@@ -76,6 +78,37 @@ class DataAndModelTests(unittest.TestCase):
         dm.setup("fit")
         self.assertIsNotNone(dm.class_weights)
         self.assertEqual(dm.class_weights.shape[0], 23)
+
+    def test_class_weight_alpha_zero_disables_weights(self) -> None:
+        dm = WaymoLidarDataModule(
+            data_dir=self.point_root,
+            representation="point_clouds",
+            batch_size=1,
+            num_points=8,
+            num_classes=23,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            num_workers=0,
+            max_cached_segments=1,
+            class_weight_alpha=0.0,
+        )
+        dm.setup("fit")
+        self.assertIsNone(dm.class_weights)
+
+    def test_balanced_class_weights_follow_inverse_count_power_alpha(self) -> None:
+        weights = balanced_class_weights(torch.tensor([0, 4, 1], dtype=torch.float32).numpy(), alpha=0.5)
+        self.assertIsNotNone(weights)
+        self.assertAlmostEqual(float(weights[0].item()), 0.0, places=6)
+        self.assertAlmostEqual(float(weights[1].item()), 2.0 / 3.0, places=6)
+        self.assertAlmostEqual(float(weights[2].item()), 4.0 / 3.0, places=6)
+
+    def test_focal_gamma_zero_matches_cross_entropy(self) -> None:
+        logits = torch.tensor([[[2.0, 0.5], [0.1, 1.2], [-0.7, 0.3]]], dtype=torch.float32)
+        target = torch.tensor([[0, 1]], dtype=torch.long)
+        focal = focal_cross_entropy_loss(logits, target, gamma=0.0, class_dim=1)
+        cross_entropy = torch.nn.functional.cross_entropy(logits, target)
+        self.assertAlmostEqual(float(focal.item()), float(cross_entropy.item()), places=6)
 
     def test_batch_contracts_for_representative_models(self) -> None:
         point_ds = PreprocessedPointCloudDataset(self.point_root, source_subdirs="training", num_points=8)

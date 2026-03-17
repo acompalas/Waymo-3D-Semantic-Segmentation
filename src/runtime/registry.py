@@ -59,7 +59,8 @@ class ModelSelection:
             backbone=self.backbone,
             behavior=self.behavior,
             diffusion_steps=getattr(args, "diffusion_steps", 1000),
-            use_balanced_class_weights=not bool(args.no_balanced_class_weights),
+            class_weight_alpha=getattr(args, "class_weight_alpha", 1.0),
+            focal_loss_gamma=getattr(args, "focal_loss_gamma", 0.0),
             geometry_only=bool(args.geometry_only),
         )
         filtered = _filtered_backbone_kwargs(backbone_spec, args)

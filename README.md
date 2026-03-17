@@ -122,7 +122,8 @@ These are required for every command.
 | `--max-epochs` | training epochs | `20` |
 | `--lr` | learning rate | `1e-3` |
 | `--weight-decay` | optimizer weight decay | `1e-4` |
-| `--no-balanced-class-weights` | disable balanced class weighting | `False` |
+| `--class-weight-alpha` | class-weight exponent in `(1 / count)^alpha`; `0` disables weighting | `1.0` |
+| `--focal-loss-gamma` | focal-loss gamma for supervised training; `0` recovers cross-entropy | `0.0` |
 | `--early-stopping-patience` | early stopping patience in epochs | `2` |
 | `--early-stopping-min-delta` | minimum improvement for early stopping | `0.0` |
 | `--train-segment-fraction` | fraction of train segments to keep | `1.0` |

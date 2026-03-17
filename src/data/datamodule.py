@@ -20,14 +20,18 @@ def _normalize_subdirs(values: Optional[Sequence[str] | str]) -> list[str]:
     return [str(x) for x in values]
 
 
-def balanced_class_weights(counts: np.ndarray) -> torch.Tensor:
+def balanced_class_weights(counts: np.ndarray, *, alpha: float) -> torch.Tensor | None:
     counts = np.asarray(counts, dtype=np.float64)
+    alpha = float(alpha)
+    if alpha < 0.0:
+        raise ValueError(f"class_weight_alpha must be >= 0, got {alpha}")
+    if alpha == 0.0:
+        return None
     num_classes = int(counts.shape[0])
-    total = float(counts.sum())
     weights = np.zeros_like(counts, dtype=np.float64)
     present = counts > 0
-    if total > 0 and np.any(present):
-        weights[present] = total / (num_classes * counts[present])
+    if np.any(present):
+        weights[present] = np.power(1.0 / counts[present], alpha)
         weights[present] = weights[present] / np.mean(weights[present])
     if num_classes > 0:
         weights[0] = 0.0
@@ -85,7 +89,7 @@ class WaymoLidarDataModule(L.LightningDataModule):
         seed: int = 0,
         drop_last_train: bool = True,
         worker_start_method: str = "spawn",
-        balanced_weights: bool = True,
+        class_weight_alpha: float = 1.0,
         train_segment_fraction: float = 1.0,
         val_samples_per_segment: int = 0,
     ) -> None:
@@ -106,9 +110,11 @@ class WaymoLidarDataModule(L.LightningDataModule):
         self.seed = int(seed)
         self.drop_last_train = bool(drop_last_train)
         self.worker_start_method = str(worker_start_method)
-        self.balanced_weights = bool(balanced_weights)
+        self.class_weight_alpha = float(class_weight_alpha)
         self.train_segment_fraction = float(train_segment_fraction)
         self.val_samples_per_segment = int(val_samples_per_segment)
+        if self.class_weight_alpha < 0.0:
+            raise ValueError(f"class_weight_alpha must be >= 0, got {self.class_weight_alpha}")
         if not (0.0 < self.train_segment_fraction <= 1.0):
             raise ValueError(f"train_segment_fraction must be in (0, 1], got {self.train_segment_fraction}")
         if self.val_samples_per_segment < 0:
@@ -260,16 +266,16 @@ class WaymoLidarDataModule(L.LightningDataModule):
             if self.train_dataset is not None and hasattr(self.train_dataset, "compute_class_counts"):
                 counts = self.train_dataset.compute_class_counts(self.num_classes)
                 self.class_counts = torch.tensor(counts.astype(np.int64), dtype=torch.long)
-                self.class_weights = balanced_class_weights(counts) if self.balanced_weights else None
+                self.class_weights = balanced_class_weights(counts, alpha=self.class_weight_alpha)
                 rank_zero_info(
                     "Class counts (train supervised elements):\n"
                     f"{_format_named_class_stats(self.class_counts, class_names=self.class_names, float_values=False)}"
                 )
-                if not self.balanced_weights:
-                    rank_zero_info("Balanced class weights: disabled")
+                if self.class_weight_alpha == 0.0:
+                    rank_zero_info("Class weights: disabled (class_weight_alpha=0.0)")
                 elif self.class_weights is not None:
                     rank_zero_info(
-                        "Class weights:\n"
+                        f"Class weights (alpha={self.class_weight_alpha:.3f}):\n"
                         f"{_format_named_class_stats(self.class_weights, class_names=self.class_names, float_values=True)}"
                     )
                 else:
