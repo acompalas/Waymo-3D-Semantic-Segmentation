@@ -8,7 +8,6 @@ from ...features import MultiScaleKnnEigenFeatureExtractor
 
 def add_handcrafted_backbone_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--knn-scales", type=str, default="16,32,64")
-    parser.add_argument("--knn-support-size", type=int, default=16384)
     parser.add_argument("--knn-query-chunk", type=int, default=4096)
     parser.add_argument("--hidden-dim", type=int, default=0)
     parser.add_argument("--depth", type=int, default=0)
@@ -20,7 +19,6 @@ class HandcraftedPointBackbone(nn.Module):
         self,
         input_dim: int,
         scales: tuple[int, ...] = (16, 32, 64),
-        knn_support_size: int = 16384,
         knn_query_chunk: int = 4096,
         hidden_dim: int = 0,
         depth: int = 0,
@@ -30,7 +28,6 @@ class HandcraftedPointBackbone(nn.Module):
         self.input_dim = int(input_dim)
         self.feature_extractor = MultiScaleKnnEigenFeatureExtractor(
             scales=scales,
-            knn_support_size=int(knn_support_size),
             knn_query_chunk=int(knn_query_chunk),
         )
         self.hidden_dim = int(hidden_dim)

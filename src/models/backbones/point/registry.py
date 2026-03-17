@@ -47,7 +47,6 @@ def _build_handcrafted(**kwargs) -> nn.Module:
     return HandcraftedPointBackbone(
         input_dim=kwargs["input_dim"],
         scales=kwargs.get("knn_scales", (16, 32, 64)),
-        knn_support_size=kwargs.get("knn_support_size", 16384),
         knn_query_chunk=kwargs.get("knn_query_chunk", 4096),
         hidden_dim=kwargs.get("hidden_dim", 0),
         depth=kwargs.get("depth", 0),

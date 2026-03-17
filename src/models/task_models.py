@@ -26,7 +26,6 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
         use_balanced_class_weights: bool = True,
         geometry_only: bool = False,
         knn_scales: tuple[int, ...] = (16, 32, 64),
-        knn_support_size: int = 16384,
         knn_query_chunk: int = 4096,
     ) -> None:
         super().__init__(
@@ -58,7 +57,6 @@ class PointCloudTaskModel(PointCloudSegmentationModel):
             knn_k=int(knn_k),
             time_dim=self.behavior_impl.time_dim,
             knn_scales=tuple(int(k) for k in knn_scales),
-            knn_support_size=int(knn_support_size),
             knn_query_chunk=int(knn_query_chunk),
         )
         self.head = PointMLPHead(input_dim=int(self.backbone.output_dim), output_dim=int(num_classes))

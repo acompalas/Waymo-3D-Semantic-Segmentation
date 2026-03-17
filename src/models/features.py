@@ -9,20 +9,16 @@ class MultiScaleKnnEigenFeatureExtractor(nn.Module):
         self,
         scales: Sequence[int] = (16, 32, 64),
         eps: float = 1e-6,
-        knn_support_size: int = 16384,
         knn_query_chunk: int = 4096,
     ) -> None:
         super().__init__()
         scales = tuple(int(k) for k in scales)
         if not scales or any(k <= 0 for k in scales):
             raise ValueError(f"Invalid scales: {scales}")
-        if int(knn_support_size) <= 1:
-            raise ValueError(f"knn_support_size must be > 1, got {knn_support_size}")
         if int(knn_query_chunk) <= 0:
             raise ValueError(f"knn_query_chunk must be > 0, got {knn_query_chunk}")
         self.scales = scales
         self.eps = float(eps)
-        self.knn_support_size = int(knn_support_size)
         self.knn_query_chunk = int(knn_query_chunk)
         self.per_scale_dim = 11
         self.base_dim = 5
@@ -33,9 +29,8 @@ class MultiScaleKnnEigenFeatureExtractor(nn.Module):
         if m <= 1:
             return points.new_zeros((m, 0)), torch.zeros((m, 0), dtype=torch.long, device=points.device)
 
-        support_size = min(m, int(self.knn_support_size))
-        support = points[:support_size]
-
+        support = points
+        support_size = m
         k_eff = min(int(k_max), support_size - 1)
         if k_eff <= 0:
             return points.new_zeros((m, 0)), torch.zeros((m, 0), dtype=torch.long, device=points.device)
