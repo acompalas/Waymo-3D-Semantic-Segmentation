@@ -57,6 +57,17 @@ def run_command(cmd: list[str], *, cwd: Path | None = None) -> None:
     subprocess.run(cmd, cwd=str(cwd) if cwd is not None else None, check=True)
 
 
+def try_command(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    print(f"\n$ {shlex.join(cmd)}")
+    return subprocess.run(
+        cmd,
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def ensure_drive_mount() -> None:
     if not in_colab():
         raise RuntimeError("This helper is intended to be run inside Google Colab.")
@@ -92,20 +103,38 @@ def install_gcsfuse() -> None:
         .stdout.strip()
     )
     keyring = Path("/usr/share/keyrings/cloud.google.asc")
-    repo_line = f"deb [signed-by={keyring}] https://packages.cloud.google.com/apt gcsfuse-{release} main"
     repo_path = Path("/etc/apt/sources.list.d/gcsfuse.list")
+    urllib.request.urlretrieve("https://packages.cloud.google.com/apt/doc/apt-key.gpg", keyring)
 
     print("Installing gcsfuse ...")
-    run_command(
-        [
-            "bash",
-            "-lc",
-            f"curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | "
-            f"gpg --dearmor -o {shlex.quote(str(keyring))}",
-        ]
-    )
-    repo_path.write_text(repo_line + "\n", encoding="utf-8")
-    run_command(["apt-get", "update"])
+    candidates = [release]
+    if release == "noble":
+        candidates.extend(["jammy", "focal"])
+    elif release == "jammy":
+        candidates.append("focal")
+
+    last_failure: subprocess.CompletedProcess[str] | None = None
+    for candidate in candidates:
+        repo_line = f"deb [signed-by={keyring}] https://packages.cloud.google.com/apt gcsfuse-{candidate} main"
+        repo_path.write_text(repo_line + "\n", encoding="utf-8")
+        result = try_command(["apt-get", "update"])
+        if result.returncode == 0:
+            break
+        last_failure = result
+        print(f"apt-get update failed for gcsfuse repo '{candidate}', trying another Ubuntu codename if available.")
+    else:
+        if last_failure is not None:
+            if last_failure.stdout:
+                print(last_failure.stdout)
+            if last_failure.stderr:
+                print(last_failure.stderr)
+            raise subprocess.CalledProcessError(
+                last_failure.returncode,
+                last_failure.args,
+                output=last_failure.stdout,
+                stderr=last_failure.stderr,
+            )
+
     run_command(["apt-get", "install", "-y", "gcsfuse"])
 
 
