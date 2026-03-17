@@ -8,6 +8,7 @@ This repository exposes one package and one CLI for all supported LiDAR semantic
 - `range_unet`: supervised range-image U-Net
 - `range_diffusion`: diffusion model in range-image space
 - `point_diffusion`: diffusion model in point-cloud space with `edgeconv` or `pointnet` backbone
+- `point_dp3_diffusion`: diffusion model in point-cloud space with DP3-style global encoder + edgeconv denoiser
 
 ## Layout
 - `src/data`: preprocessed dataset loading, dense frame access, datamodule, scene-aware batching
@@ -68,6 +69,7 @@ python -m src.main train --model point_supervised --backbone pointnetplusplus
 python -m src.main train --model range_unet
 python -m src.main train --model range_diffusion --diffusion-steps 200 --validation-prediction-mode cheap
 python -m src.main train --model point_diffusion --backbone edgeconv --diffusion-steps 200 --validation-prediction-mode full
+python -m src.main train --model point_dp3_diffusion --diffusion-steps 200 --validation-prediction-mode full
 python -m src.main train --model point_svm --geometry-only --no-auto-evaluate
 ```
 
@@ -76,6 +78,7 @@ Evaluate:
 ```bash
 python -m src.main evaluate --model range_unet --checkpoint output/range_unet/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_diffusion --checkpoint output/point_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
+python -m src.main evaluate --model point_dp3_diffusion --checkpoint output/point_dp3_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
 python -m src.main evaluate --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_supervised --backbone pointnetplusplus --checkpoint output/point_supervised/.../checkpoints/last.ckpt
 python -m src.main evaluate --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt --splits train,val,test
@@ -89,6 +92,7 @@ python -m src.main render --model range_diffusion --checkpoint output/range_diff
 python -m src.main render --model point_svm --checkpoint output/point_svm/.../checkpoints/last.ckpt
 python -m src.main render --model point_supervised --checkpoint output/point_supervised/.../checkpoints/last.ckpt
 python -m src.main render --model point_supervised --backbone pointnetplusplus --checkpoint output/point_supervised/.../checkpoints/last.ckpt
+python -m src.main render --model point_dp3_diffusion --checkpoint output/point_dp3_diffusion/.../checkpoints/last.ckpt --sampling-steps 50
 ```
 
 Common options:

@@ -11,9 +11,7 @@ import torch
 
 from .data import PreprocessedPointCloudDataset, PreprocessedRangeImageDataset, WaymoLidarDataModule
 from .runtime import (
-    MODEL_REGISTRY,
     collect_stage_reports,
-    get_model_spec,
     log_final_report_metrics,
     parse_report_splits,
     prepare_model_for_reporting,
@@ -21,6 +19,7 @@ from .runtime import (
     setup_datamodule_for_report,
     write_report_bundle,
 )
+from .runtime.registry import MODEL_REGISTRY, get_model_spec
 from .tools import label_colors, render_point_cloud, save_gif
 
 
