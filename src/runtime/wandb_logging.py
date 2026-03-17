@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+import warnings
 
 from lightning.pytorch.callbacks import Callback
 import numpy as np
@@ -295,6 +296,37 @@ def _sampled_point_frame(
     }
 
 
+def _filter_resolvable_audit_examples(
+    source: AuditSource,
+    examples: Iterable[AuditExample],
+) -> list[AuditExample]:
+    kept: list[AuditExample] = []
+    skipped: list[tuple[AuditExample, Exception]] = []
+    for example in examples:
+        try:
+            source.point_dataset.get_dense_frame(example.segment, example.timestamp)
+        except (FileNotFoundError, KeyError, OSError, ValueError) as exc:
+            skipped.append((example, exc))
+            continue
+        kept.append(example)
+
+    if skipped:
+        preview = ", ".join(
+            f"{example.segment}@{example.timestamp}" for example, _ in skipped[:3]
+        )
+        warnings.warn(
+            (
+                f"Skipping {len(skipped)} {source.split} audit point cloud example(s) because dense point-cloud files "
+                f"are missing or incomplete under {source.point_dataset.path}. First few: {preview}. "
+                "Set --point-data-dir to the dense point-cloud dataset root (for example "
+                "`data/preprocessed/point_clouds`) to re-enable audit point cloud logging."
+            ),
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return kept
+
+
 def build_audit_source(
     datamodule: WaymoLidarDataModule,
     *,
@@ -320,11 +352,20 @@ def build_audit_source(
         num_points=datamodule.num_points,
     )
     range_dataset = dataset if isinstance(dataset, PreprocessedRangeImageDataset) else None
+    examples = _filter_resolvable_audit_examples(
+        AuditSource(
+            split=split_name,
+            point_dataset=point_dataset,
+            range_dataset=range_dataset,
+            examples=[],
+        ),
+        select_audit_examples(dataset, count=int(count)),
+    )
     return AuditSource(
         split=split_name,
         point_dataset=point_dataset,
         range_dataset=range_dataset,
-        examples=select_audit_examples(dataset, count=int(count)),
+        examples=examples,
     )
 
 

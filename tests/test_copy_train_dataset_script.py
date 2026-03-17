@@ -31,7 +31,11 @@ def _build_fake_dataset(root: Path, dataset_name: str) -> None:
     _write_json(
         dataset_root / "segment_source.json",
         [
-            {"source_subdir": "training", "is_labeled": True, "segments": ["segment_train_a", "segment_train_b"]},
+            {
+                "source_subdir": "training",
+                "is_labeled": True,
+                "segments": ["segment_train_a", "segment_train_b", "segment_train_c"],
+            },
             {"source_subdir": "validation", "is_labeled": True, "segments": ["segment_val"]},
         ],
     )
@@ -39,6 +43,7 @@ def _build_fake_dataset(root: Path, dataset_name: str) -> None:
     for segment_name, payload in {
         "segment_train_a": "train-a",
         "segment_train_b": "train-b",
+        "segment_train_c": "train-c",
         "segment_val": "val",
     }.items():
         segment_dir = dataset_root / "segments" / segment_name
@@ -73,10 +78,11 @@ class CopyTrainDatasetScriptTests(unittest.TestCase):
             self.assertTrue((copied_dir / "extra_metadata.json").exists())
 
             copied_segments = sorted(path.name for path in (copied_dir / "segments").iterdir() if path.is_dir())
-            self.assertEqual(copied_segments, ["segment_train_a", "segment_train_b"])
+            self.assertEqual(copied_segments, ["segment_train_a", "segment_train_b", "segment_train_c"])
             self.assertFalse((copied_dir / "segments" / "segment_val").exists())
             self.assertEqual((copied_dir / "segments" / "segment_train_a" / "payload.txt").read_text(), "train-a")
             self.assertEqual((copied_dir / "segments" / "segment_train_b" / "payload.txt").read_text(), "train-b")
+            self.assertEqual((copied_dir / "segments" / "segment_train_c" / "payload.txt").read_text(), "train-c")
 
             copied_segment_source = json.loads((copied_dir / "segment_source.json").read_text(encoding="utf-8"))
             self.assertEqual(
@@ -85,11 +91,41 @@ class CopyTrainDatasetScriptTests(unittest.TestCase):
                     {
                         "source_subdir": "training",
                         "is_labeled": True,
-                        "segments": ["segment_train_a", "segment_train_b"],
+                        "segments": ["segment_train_a", "segment_train_b", "segment_train_c"],
                     },
                     {"source_subdir": "validation", "is_labeled": True, "segments": []},
                 ],
             )
+
+    def test_copy_respects_max_segments_limit(self) -> None:
+        source_root = self.base_dir / "source"
+        dest_root = self.base_dir / "dest"
+        _build_fake_dataset(source_root, "point_clouds")
+
+        copied_dir = self.module.copy_train_split_dataset(
+            dataset="point_clouds",
+            source_root=source_root,
+            dest_root=dest_root,
+            max_segments=1,
+        )
+
+        copied_segments = sorted(path.name for path in (copied_dir / "segments").iterdir() if path.is_dir())
+        self.assertEqual(copied_segments, ["segment_train_a"])
+        self.assertFalse((copied_dir / "segments" / "segment_train_b").exists())
+        self.assertFalse((copied_dir / "segments" / "segment_train_c").exists())
+
+        copied_segment_source = json.loads((copied_dir / "segment_source.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            copied_segment_source,
+            [
+                {
+                    "source_subdir": "training",
+                    "is_labeled": True,
+                    "segments": ["segment_train_a"],
+                },
+                {"source_subdir": "validation", "is_labeled": True, "segments": []},
+            ],
+        )
 
 
 if __name__ == "__main__":

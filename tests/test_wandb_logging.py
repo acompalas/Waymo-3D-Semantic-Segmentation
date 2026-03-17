@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import shutil
+import warnings
 from unittest.mock import patch
 
 import numpy as np
@@ -113,6 +114,32 @@ class WandbLoggingTests(unittest.TestCase):
 
         self.assertIsNotNone(source)
         self.assertEqual(source.point_dataset.num_points, 5)
+
+    def test_build_audit_source_skips_missing_dense_point_files_for_range_data(self) -> None:
+        _, range_root = build_synthetic_preprocessed_roots(self.base_dir / "missing_dense")
+        point_root = self.base_dir / "missing_dense" / "point_clouds"
+        (point_root / "segments" / "segment_val" / "xyz.npy").unlink()
+
+        datamodule = WaymoLidarDataModule(
+            data_dir=range_root,
+            point_data_dir=point_root,
+            range_data_dir=range_root,
+            representation="range_images",
+            batch_size=1,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            num_workers=0,
+        )
+        datamodule.setup("fit")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            source = build_audit_source(datamodule, split="val", count=1)
+
+        self.assertIsNotNone(source)
+        self.assertEqual(source.examples, [])
+        self.assertTrue(any("--point-data-dir" in str(item.message) for item in caught))
 
     def test_log_audit_pointclouds_uses_sampled_point_frames_for_point_models(self) -> None:
         datamodule = WaymoLidarDataModule(
@@ -237,6 +264,77 @@ class WandbLoggingTests(unittest.TestCase):
         logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
         self.assertIn("val/confusion_matrix", logged_keys)
         self.assertTrue(any(key.startswith("val/pointcloud_") for key in logged_keys))
+
+    def test_validation_batch_end_skips_missing_dense_point_audit_examples_for_range_models(self) -> None:
+        point_root, range_root = build_synthetic_preprocessed_roots(self.base_dir / "range_missing_dense")
+        (point_root / "segments" / "segment_val" / "xyz.npy").unlink()
+
+        datamodule = WaymoLidarDataModule(
+            data_dir=range_root,
+            point_data_dir=point_root,
+            range_data_dir=range_root,
+            representation="range_images",
+            batch_size=1,
+            num_workers=0,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+        )
+        datamodule.setup("fit")
+        logger = FakeWandbLogger(project="test", save_dir=str(self.base_dir))
+        callback = WandbSegmentationCallback(log_pointcloud_count=1)
+
+        class DummyTrainer:
+            def __init__(self, datamodule, logger) -> None:
+                self.datamodule = datamodule
+                self.logger = logger
+                self.global_step = 3
+                self.current_epoch = 0
+                self.sanity_checking = False
+                self.is_global_zero = True
+
+        class DummyModel:
+            def __init__(self) -> None:
+                self._class_names = []
+
+            @property
+            def class_names(self) -> list[str]:
+                return list(self._class_names)
+
+            def set_class_names(self, class_names: list[str]) -> None:
+                self._class_names = list(class_names)
+
+            def get_confusion_matrix(self, stage: str) -> torch.Tensor:
+                _ = stage
+                return torch.zeros((23, 23), dtype=torch.int64)
+
+        trainer = DummyTrainer(datamodule, logger)
+        model = DummyModel()
+        batch = next(iter(datamodule.val_dataloader()))
+        batch_size = int(batch["semantic"].shape[0])
+        outputs = {
+            "loss": torch.tensor(0.0),
+            "preds": batch["semantic"].reshape(batch_size * 2, -1).clone(),
+            "labels": batch["semantic"].clone(),
+            "metric_mask": batch["valid_label"].clone(),
+            "batch_size": batch_size,
+        }
+
+        with (
+            patch("src.runtime.wandb_logging._import_wandb", return_value=FakeWandbModule),
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter("always")
+            callback.on_fit_start(trainer, model)
+            callback.on_validation_epoch_start(trainer, model)
+            callback.on_validation_batch_end(trainer, model, outputs, batch, batch_idx=0)
+            callback.on_validation_epoch_end(trainer, model)
+
+        self.assertEqual(callback._cached_val_predictions, {})
+        logged_keys = {key for payload, _ in logger.experiment.logged for key in payload}
+        self.assertIn("val/confusion_matrix", logged_keys)
+        self.assertFalse(any(key.startswith("val/pointcloud_") for key in logged_keys))
+        self.assertTrue(any("--point-data-dir" in str(item.message) for item in caught))
 
 
 if __name__ == "__main__":

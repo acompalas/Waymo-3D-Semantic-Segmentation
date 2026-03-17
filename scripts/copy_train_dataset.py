@@ -13,6 +13,7 @@ DEFAULT_SOURCE_ROOT = Path("/content/drive/MyDrive/ece271b/preprocessed")
 DEFAULT_DEST_ROOT = REPO_ROOT / "data" / "preprocessed"
 SEGMENT_SOURCE_FILENAME = "segment_source.json"
 TRAIN_SOURCE_SUBDIR = "training"
+DEFAULT_MAX_SEGMENTS = 200
 
 DATASET_ALIASES = {
     "point_clouds": "point_clouds",
@@ -53,6 +54,12 @@ def parse_args() -> argparse.Namespace:
         default=TRAIN_SOURCE_SUBDIR,
         help="Source split name to keep. Defaults to training.",
     )
+    parser.add_argument(
+        "--max-segments",
+        type=int,
+        default=DEFAULT_MAX_SEGMENTS,
+        help="Maximum number of selected segments to copy. Use 0 to copy all selected segments.",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Replace the destination dataset if it exists.")
     return parser.parse_args()
 
@@ -84,7 +91,11 @@ def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=False)
 
 
-def _filtered_segment_source(records: Any, source_subdir: str) -> tuple[list[dict[str, Any]], list[str]]:
+def _filtered_segment_source(
+    records: Any,
+    source_subdir: str,
+    max_segments: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
     if not isinstance(records, list):
         raise ValueError("Expected segment_source.json to contain a list of records.")
 
@@ -92,6 +103,7 @@ def _filtered_segment_source(records: Any, source_subdir: str) -> tuple[list[dic
     kept_segments: list[str] = []
     seen_segments: set[str] = set()
     found_source = False
+    remaining = None if int(max_segments) <= 0 else int(max_segments)
 
     for record in records:
         if not isinstance(record, dict):
@@ -99,7 +111,14 @@ def _filtered_segment_source(records: Any, source_subdir: str) -> tuple[list[dic
 
         current_source = str(record.get("source_subdir", ""))
         original_segments = [str(segment) for segment in record.get("segments", [])]
-        keep_segments = original_segments if current_source == source_subdir else []
+        if current_source == source_subdir:
+            if remaining is None:
+                keep_segments = original_segments
+            else:
+                keep_segments = original_segments[:remaining]
+                remaining = max(0, remaining - len(keep_segments))
+        else:
+            keep_segments = []
         found_source = found_source or current_source == source_subdir
 
         for segment in keep_segments:
@@ -132,6 +151,7 @@ def copy_train_split_dataset(
     source_root: Path,
     dest_root: Path,
     source_subdir: str = TRAIN_SOURCE_SUBDIR,
+    max_segments: int = DEFAULT_MAX_SEGMENTS,
     overwrite: bool = False,
 ) -> Path:
     dataset_name = _normalize_dataset_name(dataset)
@@ -145,7 +165,11 @@ def copy_train_split_dataset(
         raise FileNotFoundError(f"Missing source segments directory: {segments_source_dir}")
 
     segment_source_records = _read_json(source_dir / SEGMENT_SOURCE_FILENAME)
-    filtered_records, kept_segments = _filtered_segment_source(segment_source_records, str(source_subdir))
+    filtered_records, kept_segments = _filtered_segment_source(
+        segment_source_records,
+        str(source_subdir),
+        int(max_segments),
+    )
 
     print(f"Preparing to copy {len(kept_segments)} '{source_subdir}' segments for {dataset_name}.", flush=True)
     print(f"Source:      {source_dir}", flush=True)
@@ -176,6 +200,7 @@ def main() -> None:
         source_root=Path(args.source_root),
         dest_root=Path(args.dest_root),
         source_subdir=str(args.source_subdir),
+        max_segments=int(args.max_segments),
         overwrite=bool(args.overwrite),
     )
     print(f"Copied {args.source_subdir} {DATASET_ALIASES[str(args.dataset)]} dataset to: {dest_dir}")
