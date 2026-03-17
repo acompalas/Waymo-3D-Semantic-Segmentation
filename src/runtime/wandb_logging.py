@@ -18,15 +18,6 @@ def _import_wandb():
     return wandb
 
 
-def _point_data_dir_for_representation(data_dir: Path, representation: str) -> Path:
-    if str(representation) == "point_clouds":
-        return Path(data_dir)
-    candidate = Path(data_dir).parent / "point_clouds"
-    if not candidate.exists():
-        raise FileNotFoundError(f"Unable to locate paired point-cloud dataset at {candidate}")
-    return candidate
-
-
 def _sequence_indices(length: int, count: int) -> list[int]:
     if length <= 0 or count <= 0:
         return []
@@ -227,7 +218,7 @@ def build_audit_source(
         return None
 
     point_dataset = _build_point_dataset(
-        _point_data_dir_for_representation(datamodule.data_dir, datamodule.representation),
+        Path(datamodule.point_data_dir),
         segments=dataset.segment_names,
         seed=datamodule.seed + {"train": 401, "val": 402, "test": 403}[str(split)],
     )

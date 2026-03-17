@@ -1,11 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
+import shutil
 
 import numpy as np
 
-from src.data import PreprocessedPointCloudDataset
-from src.runtime.wandb_logging import confusion_table_rows, select_audit_examples, stage_metric_dict
+from src.data import PreprocessedPointCloudDataset, WaymoLidarDataModule
+from src.runtime.wandb_logging import build_audit_source, confusion_table_rows, select_audit_examples, stage_metric_dict
 from tests.helpers import build_synthetic_preprocessed_roots
 
 
@@ -61,6 +62,28 @@ class WandbLoggingTests(unittest.TestCase):
         self.assertEqual(len(examples), 4)
         self.assertTrue(all(example.segment == "segment_val" for example in examples))
         self.assertTrue(all(example.timestamp == 101 for example in examples))
+
+    def test_build_audit_source_uses_explicit_point_data_dir_for_range_data(self) -> None:
+        relocated_root = self.base_dir / "custom_layout" / "range_images"
+        relocated_root.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(self.point_root.parent / "range_images", relocated_root)
+
+        datamodule = WaymoLidarDataModule(
+            data_dir=relocated_root,
+            point_data_dir=self.point_root,
+            range_data_dir=relocated_root,
+            representation="range_images",
+            batch_size=1,
+            train_subdirs="training",
+            val_subdirs="validation",
+            test_subdirs="validation",
+            num_workers=0,
+        )
+        datamodule.setup("fit")
+
+        source = build_audit_source(datamodule, split="val", count=1)
+        self.assertIsNotNone(source)
+        self.assertEqual(source.point_dataset.path, self.point_root)
 
 
 if __name__ == "__main__":

@@ -57,6 +57,30 @@ class RuntimeMetricsTests(unittest.TestCase):
         self.assertIn("IoU_class_3", summary["metrics"])
         self.assertEqual(len(summary["confusion_matrix"]), 4)
 
+    def test_stage_report_accumulator_weights_accuracy_by_valid_elements(self) -> None:
+        accumulator = StageReportAccumulator("test", num_classes=3)
+        accumulator.consume(
+            {
+                "loss": torch.tensor(0.0),
+                "preds": torch.tensor([[1, 1, 1, 1]]),
+                "labels": torch.tensor([[1, 1, 1, 1]]),
+                "metric_mask": torch.tensor([[True, True, True, True]]),
+                "batch_size": 1,
+            }
+        )
+        accumulator.consume(
+            {
+                "loss": torch.tensor(0.0),
+                "preds": torch.tensor([[1, 1, 1, 1]]),
+                "labels": torch.tensor([[2, 2, 2, 2]]),
+                "metric_mask": torch.tensor([[True, False, False, False]]),
+                "batch_size": 1,
+            }
+        )
+
+        summary = accumulator.summary()
+        self.assertAlmostEqual(summary["metrics"]["acc"], 0.8, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

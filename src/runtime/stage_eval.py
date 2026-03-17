@@ -16,6 +16,7 @@ PREDICTION_STAGE_OUTPUT_KEYS = {
     "metric_mask",
 }
 
+
 def validate_stage_output(output: dict[str, Any], *, require_predictions: bool = False) -> dict[str, Any]:
     missing = REQUIRED_STAGE_OUTPUT_KEYS.difference(output)
     if missing:
@@ -44,6 +45,13 @@ def validate_stage_output(output: dict[str, Any], *, require_predictions: bool =
     return output
 
 
+def stage_output_metric_weight(output: dict[str, Any]) -> int:
+    output = validate_stage_output(output)
+    if "metric_mask" not in output:
+        return max(1, int(output["batch_size"]))
+    return int(output["metric_mask"].bool().sum().item())
+
+
 def consume_stage_output(confmat: torch.Tensor, output: dict[str, Any], *, num_classes: int) -> torch.Tensor | None:
     output = validate_stage_output(output)
     if "preds" not in output:
@@ -70,13 +78,15 @@ class StageReportAccumulator:
 
     def consume(self, output: dict[str, Any]) -> None:
         output = validate_stage_output(output, require_predictions=True)
-        batch_size = max(1, int(output["batch_size"]))
+        metric_weight = stage_output_metric_weight(output)
         acc = consume_stage_output(self.confmat, output, num_classes=self.num_classes)
         if acc is None:
             raise ValueError("Stage report accumulation requires prediction tensors.")
-        self.loss_sum += scalarize_metric_tensor(output["loss"]) * batch_size
-        self.acc_sum += scalarize_metric_tensor(acc) * batch_size
-        self.weight += batch_size
+        if metric_weight <= 0:
+            return
+        self.loss_sum += scalarize_metric_tensor(output["loss"]) * metric_weight
+        self.acc_sum += scalarize_metric_tensor(acc) * metric_weight
+        self.weight += metric_weight
 
     def summary(self) -> dict[str, Any]:
         denom = max(1, self.weight)

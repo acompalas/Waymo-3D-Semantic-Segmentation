@@ -71,6 +71,8 @@ class WaymoLidarDataModule(L.LightningDataModule):
         self,
         data_dir: str | Path,
         representation: str,
+        point_data_dir: str | Path | None = None,
+        range_data_dir: str | Path | None = None,
         batch_size: int = 8,
         num_points: int = 16384,
         num_classes: int = 23,
@@ -89,6 +91,8 @@ class WaymoLidarDataModule(L.LightningDataModule):
     ) -> None:
         super().__init__()
         self.data_dir = Path(data_dir)
+        self.point_data_dir = Path(point_data_dir) if point_data_dir is not None else self.data_dir
+        self.range_data_dir = Path(range_data_dir) if range_data_dir is not None else self.data_dir
         self.representation = str(representation).strip().lower()
         self.batch_size = int(batch_size)
         self.num_points = int(num_points)

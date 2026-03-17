@@ -26,7 +26,8 @@ from .tools import label_colors, render_point_cloud, save_gif
 
 
 def add_common_train_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--point-data-dir", type=Path, default=Path("data/preprocessed/point_clouds"))
+    parser.add_argument("--range-data-dir", type=Path, default=Path("data/preprocessed/range_images"))
     parser.add_argument("--train-subdirs", type=str, default="training")
     parser.add_argument("--val-subdirs", type=str, default="")
     parser.add_argument("--test-subdirs", type=str, default="validation")
@@ -63,7 +64,8 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
 
 def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--data-dir", type=Path, default=None)
+    parser.add_argument("--point-data-dir", type=Path, default=Path("data/preprocessed/point_clouds"))
+    parser.add_argument("--range-data-dir", type=Path, default=Path("data/preprocessed/range_images"))
     parser.add_argument("--test-subdirs", type=str, default="validation")
     parser.add_argument("--splits", type=str, default="test")
     parser.add_argument("--max-batches", type=int, default=0)
@@ -87,8 +89,8 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
 
 def add_common_render_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--point-data-dir", type=Path, default=Path("data/preprocessed/point_clouds"))
+    parser.add_argument("--range-data-dir", type=Path, default=Path("data/preprocessed/range_images"))
     parser.add_argument("--source-subdirs", type=str, default="validation")
     parser.add_argument("--segment", type=str, default=None)
     parser.add_argument("--seed", type=int, default=0)
@@ -161,9 +163,19 @@ def selection_for(args: argparse.Namespace):
     return get_model_selection(args.representation, args.backbone, args.behavior)
 
 
+def point_data_dir_for(args: argparse.Namespace) -> Path:
+    return Path(args.point_data_dir)
+
+
+def range_data_dir_for(args: argparse.Namespace) -> Path:
+    return Path(args.range_data_dir)
+
+
 def data_dir_for(args: argparse.Namespace) -> Path:
     selection = selection_for(args)
-    return Path(args.data_dir) if args.data_dir is not None else selection.spec.default_data_dir
+    if selection.representation == "point_clouds":
+        return point_data_dir_for(args)
+    return range_data_dir_for(args)
 
 
 def _wandb_tags(raw: str | None) -> list[str]:
@@ -215,6 +227,8 @@ def build_datamodule(args: argparse.Namespace) -> WaymoLidarDataModule:
         val_samples_per_segment = 1 if selection.behavior == "diffusion" else 0
     return WaymoLidarDataModule(
         data_dir=data_dir_for(args),
+        point_data_dir=point_data_dir_for(args),
+        range_data_dir=range_data_dir_for(args),
         representation=selection.representation,
         batch_size=args.batch_size,
         num_points=args.num_points,
@@ -392,7 +406,7 @@ def run_render(args: argparse.Namespace) -> None:
 
     source_subdirs = args.source_subdirs
     point_dataset = PreprocessedPointCloudDataset(
-        path=args.point_data_dir,
+        path=point_data_dir_for(args),
         source_subdirs=source_subdirs,
         num_points=max(1, int(args.render_num_points)),
         deterministic_sampling=True,
@@ -403,7 +417,7 @@ def run_render(args: argparse.Namespace) -> None:
     range_dataset = None
     if selection.representation == "range_images":
         range_dataset = PreprocessedRangeImageDataset(
-            path=data_dir_for(args),
+            path=range_data_dir_for(args),
             source_subdirs=source_subdirs,
             seed=args.seed,
             max_cached_segments=1,

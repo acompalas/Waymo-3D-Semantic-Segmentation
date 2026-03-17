@@ -108,7 +108,8 @@ These are required for every command.
 
 | Argument | Description | Default |
 | --- | --- | --- |
-| `--data-dir` | preprocessed dataset root; if omitted, uses the representation default root | `None` |
+| `--point-data-dir` | preprocessed point-cloud dataset root | `data/preprocessed/point_clouds` |
+| `--range-data-dir` | preprocessed range-image dataset root | `data/preprocessed/range_images` |
 | `--train-subdirs` | comma-free source split name(s) used for training | `"training"` |
 | `--val-subdirs` | explicit validation source split(s); empty means split train segments with `--val-fraction` | `""` |
 | `--test-subdirs` | source split(s) used for test/final evaluation | `"validation"` |
@@ -147,7 +148,8 @@ These are required for every command.
 | Argument | Description | Default |
 | --- | --- | --- |
 | `--checkpoint` | checkpoint path to evaluate | required |
-| `--data-dir` | preprocessed dataset root | `None` |
+| `--point-data-dir` | preprocessed point-cloud dataset root | `data/preprocessed/point_clouds` |
+| `--range-data-dir` | preprocessed range-image dataset root | `data/preprocessed/range_images` |
 | `--test-subdirs` | source split(s) used for evaluation data | `"validation"` |
 | `--splits` | comma-separated splits to evaluate | `"test"` |
 | `--max-batches` | cap evaluation to the first N batches per split; `0` means no cap | `0` |
@@ -173,8 +175,8 @@ These are required for every command.
 | Argument | Description | Default |
 | --- | --- | --- |
 | `--checkpoint` | checkpoint path to render | required |
-| `--data-dir` | representation-specific preprocessed dataset root | `None` |
-| `--point-data-dir` | dense point-cloud root used for range-image rendering | `data/preprocessed/point_clouds` |
+| `--point-data-dir` | preprocessed point-cloud dataset root | `data/preprocessed/point_clouds` |
+| `--range-data-dir` | preprocessed range-image dataset root | `data/preprocessed/range_images` |
 | `--source-subdirs` | source split(s) used for rendering data | `"validation"` |
 | `--segment` | explicit segment name to render | `None` |
 | `--seed` | random seed | `0` |
@@ -308,9 +310,7 @@ python data_pipeline/preprocess_point_clouds.py \
 
 ## Notes For Training And Evaluation
 
-- if `--data-dir` is omitted, the CLI uses:
-  - `data/preprocessed/point_clouds` for `point_clouds`
-  - `data/preprocessed/range_images` for `range_images`
+- the CLI always accepts explicit dataset roots via `--point-data-dir` and `--range-data-dir`
 - preprocessing stores per-frame class counts in both representations so datasets can read frame-level counts directly and aggregate class totals without rescanning labels
 - `--val-samples-per-segment` controls deterministic validation subsampling
 - when omitted, validation defaults are:

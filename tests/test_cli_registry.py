@@ -79,6 +79,42 @@ class RegistryCliTests(unittest.TestCase):
         self.assertEqual(args.command, "render")
         self.assertEqual(args.backbone, "unet")
 
+    def test_explicit_dataset_paths_are_available_on_train_parser(self) -> None:
+        args = parse_args(
+            [
+                "train",
+                "--representation",
+                "range_images",
+                "--behavior",
+                "supervised",
+                "--backbone",
+                "unet",
+                "--point-data-dir",
+                "custom/points",
+                "--range-data-dir",
+                "custom/range",
+                "--no-auto-evaluate",
+            ]
+        )
+        self.assertEqual(str(args.point_data_dir), "custom/points")
+        self.assertEqual(str(args.range_data_dir), "custom/range")
+
+    def test_legacy_data_dir_arg_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            parse_args(
+                [
+                    "train",
+                    "--representation",
+                    "point_clouds",
+                    "--behavior",
+                    "supervised",
+                    "--backbone",
+                    "handcrafted",
+                    "--data-dir",
+                    "custom/points",
+                ]
+            )
+
     def test_registry_filters_choices_by_behavior(self) -> None:
         self.assertEqual(backbone_choices("point_clouds", "diffusion"), ["edgeconv", "pointnet"])
 

@@ -6,7 +6,7 @@ import torch
 
 from ..runtime.common import sanitize_metric_name
 from ..runtime.metrics import empty_confusion_matrix, iou_metrics_from_confusion_matrix
-from ..runtime.stage_eval import consume_stage_output, validate_stage_output
+from ..runtime.stage_eval import consume_stage_output, stage_output_metric_weight, validate_stage_output
 
 
 SEGMENTED_POINTCLOUD_KEYS = {
@@ -96,12 +96,13 @@ class SegmentationLightningModule(L.LightningModule):
     def _consume_and_log_stage_output(self, stage: str, output: dict[str, Any]) -> torch.Tensor:
         output = validate_stage_output(output)
         loss = output["loss"]
-        batch_size = max(1, int(output["batch_size"]))
-        self.log(f"{stage}_loss", loss, on_step=(stage == "train"), on_epoch=True, prog_bar=True, batch_size=batch_size)
+        metric_weight = stage_output_metric_weight(output)
+        log_weight = max(1, metric_weight)
+        self.log(f"{stage}_loss", loss, on_step=(stage == "train"), on_epoch=True, prog_bar=True, batch_size=log_weight)
         acc = consume_stage_output(self._confmat_for_stage(stage), output, num_classes=self._metric_num_classes)
-        if acc is not None:
+        if acc is not None and metric_weight > 0:
             self._stage_has_predictions[stage] = True
-            self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=batch_size)
+            self.log(f"{stage}_acc", acc, on_step=False, on_epoch=True, prog_bar=True, batch_size=metric_weight)
         return loss
 
     def _shared_stage_step(self, batch: dict[str, Any], stage: str) -> torch.Tensor:

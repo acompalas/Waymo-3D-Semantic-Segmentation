@@ -113,7 +113,7 @@ class EndToEndSmokeTests(unittest.TestCase):
         range_ckpt = _fit_and_save(range_model, self._range_dm(), self.base_dir / "render_range")
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch("src.main.render_point_cloud", return_value=fake_frame):
+        with patch("src.main.render_point_cloud", return_value=fake_frame), patch("src.main.save_gif") as save_gif_mock:
             run_render(
                 argparse.Namespace(
                     command="render",
@@ -121,8 +121,8 @@ class EndToEndSmokeTests(unittest.TestCase):
                     behavior="supervised",
                     backbone="handcrafted",
                     checkpoint=point_ckpt,
-                    data_dir=self.point_root,
                     point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
@@ -144,8 +144,8 @@ class EndToEndSmokeTests(unittest.TestCase):
                     behavior="supervised",
                     backbone="unet",
                     checkpoint=range_ckpt,
-                    data_dir=self.range_root,
                     point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
@@ -160,9 +160,7 @@ class EndToEndSmokeTests(unittest.TestCase):
                     device="cpu",
                 )
             )
-
-        self.assertTrue((self.base_dir / "point.gif").exists())
-        self.assertTrue((self.base_dir / "range.gif").exists())
+        self.assertEqual(save_gif_mock.call_count, 2)
 
     def test_run_render_uses_shared_model_interface(self) -> None:
         point_model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="supervised")
@@ -180,7 +178,7 @@ class EndToEndSmokeTests(unittest.TestCase):
             }
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch("src.main.render_point_cloud", return_value=fake_frame), patch.object(
+        with patch("src.main.render_point_cloud", return_value=fake_frame), patch("src.main.save_gif"), patch.object(
             PointCloudTaskModel,
             "predict_segmented_pointcloud",
             side_effect=fake_predict_segmented_pointcloud,
@@ -192,8 +190,8 @@ class EndToEndSmokeTests(unittest.TestCase):
                     behavior="supervised",
                     backbone="handcrafted",
                     checkpoint=point_ckpt,
-                    data_dir=self.point_root,
                     point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
@@ -228,7 +226,7 @@ class EndToEndSmokeTests(unittest.TestCase):
             }
 
         fake_frame = np.zeros((32, 32, 3), dtype=np.uint8)
-        with patch("src.main.render_point_cloud", return_value=fake_frame), patch.object(
+        with patch("src.main.render_point_cloud", return_value=fake_frame), patch("src.main.save_gif"), patch.object(
             PointCloudTaskModel,
             "predict_segmented_pointcloud",
             side_effect=fake_predict_segmented_pointcloud,
@@ -240,8 +238,8 @@ class EndToEndSmokeTests(unittest.TestCase):
                     behavior="supervised",
                     backbone="handcrafted",
                     checkpoint=point_ckpt,
-                    data_dir=self.point_root,
                     point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
                     source_subdirs="validation",
                     segment="segment_val",
                     seed=0,
@@ -273,7 +271,8 @@ class EndToEndSmokeTests(unittest.TestCase):
                     representation="point_clouds",
                     behavior="supervised",
                     backbone="handcrafted",
-                    data_dir=self.point_root,
+                    point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
                     train_subdirs="training",
                     val_subdirs="validation",
                     test_subdirs="validation",
@@ -331,7 +330,8 @@ class EndToEndSmokeTests(unittest.TestCase):
                     representation="point_clouds",
                     behavior="supervised",
                     backbone="handcrafted",
-                    data_dir=self.point_root,
+                    point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
                     train_subdirs="training",
                     val_subdirs="validation",
                     test_subdirs="validation",
@@ -386,7 +386,8 @@ class EndToEndSmokeTests(unittest.TestCase):
                     behavior="supervised",
                     backbone="handcrafted",
                     checkpoint=ckpt_path,
-                    data_dir=self.point_root,
+                    point_data_dir=self.point_root,
+                    range_data_dir=self.range_root,
                     test_subdirs="validation",
                     splits="test",
                     max_batches=1,
@@ -422,7 +423,8 @@ class EndToEndSmokeTests(unittest.TestCase):
             representation="point_clouds",
             behavior="supervised",
             backbone="handcrafted",
-            data_dir=self.point_root,
+            point_data_dir=self.point_root,
+            range_data_dir=self.range_root,
             train_subdirs="training",
             val_subdirs="validation",
             test_subdirs="validation",
