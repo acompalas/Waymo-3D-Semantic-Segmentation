@@ -3,13 +3,15 @@ import argparse
 import torch
 import torch.nn as nn
 
+from ..spec import BackboneSpec, make_backbone_spec
 from .common import EdgeConvBlock, SinusoidalTimeEmbedding, knn_indices
 from .pointnet import add_pointnet_backbone_args
 
 
-def add_edgeconv_backbone_args(parser: argparse.ArgumentParser) -> None:
-    add_pointnet_backbone_args(parser)
+def add_edgeconv_backbone_args(parser: argparse.ArgumentParser) -> tuple[str, ...]:
+    names = add_pointnet_backbone_args(parser)
     parser.add_argument("--knn-k", type=int, default=16)
+    return names + ("knn_k",)
 
 
 class EdgeConvBackbone(nn.Module):
@@ -54,3 +56,21 @@ class EdgeConvBackbone(nn.Module):
         for block in self.blocks:
             x = block(x, xyz, knn_idx, t_emb)
         return x + self.global_proj(x.max(dim=1).values)[:, None, :]
+
+
+def _build_edgeconv(**kwargs) -> nn.Module:
+    return EdgeConvBackbone(
+        input_dim=kwargs["input_dim"],
+        hidden_dim=kwargs.get("hidden_dim", 256),
+        depth=kwargs.get("depth", 6),
+        dropout=kwargs.get("dropout", 0.1),
+        knn_k=kwargs.get("knn_k", 16),
+        time_dim=kwargs.get("time_dim"),
+    )
+
+
+EDGECONV_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
+    supported_behaviors=("supervised", "diffusion"),
+    build=_build_edgeconv,
+    add_args_with_names=add_edgeconv_backbone_args,
+)

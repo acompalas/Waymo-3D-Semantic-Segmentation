@@ -1,12 +1,13 @@
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Any
 
 import lightning as L
 
 from ..models.backbones.point.registry import POINT_BACKBONE_SPECS
 from ..models.backbones.range.registry import RANGE_BACKBONE_SPECS
+from ..models.backbones.spec import BackboneSpec
 
 
 def _parse_scales(raw: str) -> tuple[int, ...]:
@@ -17,9 +18,8 @@ def _parse_scales(raw: str) -> tuple[int, ...]:
     return values
 
 
-class BackboneSpecLike(Protocol):
-    supported_behaviors: tuple[str, ...]
-    add_args: Callable[[argparse.ArgumentParser], None]
+def _filtered_backbone_kwargs(spec: BackboneSpec, args: argparse.Namespace) -> dict[str, Any]:
+    return {name: getattr(args, name) for name in spec.arg_names if hasattr(args, name)}
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,7 @@ class ModelSelection:
 
     def build_module(self, args: argparse.Namespace) -> L.LightningModule:
         module_cls = _representation_module_cls(self.representation)
+        backbone_spec = _backbone_spec(self.representation, self.backbone)
         common = dict(
             num_classes=args.num_classes,
             learning_rate=args.lr,
@@ -61,22 +62,10 @@ class ModelSelection:
             use_balanced_class_weights=not bool(args.no_balanced_class_weights),
             geometry_only=bool(args.geometry_only),
         )
-        if self.representation == "point_clouds":
-            return module_cls(
-                **common,
-                hidden_dim=getattr(args, "hidden_dim", None),
-                depth=getattr(args, "depth", None),
-                knn_k=getattr(args, "knn_k", 16),
-                dropout=getattr(args, "dropout", None),
-                knn_scales=_parse_scales(getattr(args, "knn_scales", "16,32,64")),
-                knn_query_chunk=getattr(args, "knn_query_chunk", 4096),
-            )
-        return module_cls(
-            **common,
-            base_channels=getattr(args, "base_channels", 32),
-            depth=getattr(args, "depth", 4),
-            dropout=getattr(args, "dropout", 0.0),
-        )
+        filtered = _filtered_backbone_kwargs(backbone_spec, args)
+        if "knn_scales" in filtered:
+            filtered["knn_scales"] = _parse_scales(filtered["knn_scales"])
+        return module_cls(**common, **filtered)
 
 
 def add_diffusion_behavior_args(parser: argparse.ArgumentParser) -> None:
@@ -94,7 +83,7 @@ REPRESENTATION_REGISTRY: dict[str, RepresentationSpec] = {
     ),
 }
 
-BACKBONE_REGISTRY: dict[str, dict[str, BackboneSpecLike]] = {
+BACKBONE_REGISTRY: dict[str, dict[str, BackboneSpec]] = {
     "point_clouds": POINT_BACKBONE_SPECS,
     "range_images": RANGE_BACKBONE_SPECS,
 }
@@ -112,7 +101,7 @@ def _representation_module_cls(representation: str) -> type[L.LightningModule]:
     raise KeyError(f"Unknown representation '{representation}'.")
 
 
-def _backbone_spec(representation: str, backbone: str) -> BackboneSpecLike:
+def _backbone_spec(representation: str, backbone: str) -> BackboneSpec:
     try:
         return BACKBONE_REGISTRY[str(representation)][str(backbone)]
     except KeyError as exc:

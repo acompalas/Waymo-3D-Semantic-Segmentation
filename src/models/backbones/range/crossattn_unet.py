@@ -4,12 +4,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..spec import BackboneSpec, make_backbone_spec
 from .common import Downsample, LiDARConditionEncoder, ResBlock, SpatialTransformerBlock, TimeEmbeddingMLP, Upsample, norm_2d
 
 
-def add_range_crossattn_backbone_args(parser: argparse.ArgumentParser) -> None:
+def add_range_crossattn_backbone_args(parser: argparse.ArgumentParser) -> tuple[str, ...]:
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--dropout", type=float, default=0.1)
+    return ("base_channels", "dropout")
 
 
 class RangeDiffusionBackbone(nn.Module):
@@ -116,3 +118,19 @@ class RangeDiffusionBackbone(nn.Module):
                 h = attn(h, context) if not isinstance(attn, nn.Identity) else h
 
         return F.silu(self.out_norm(h))
+
+
+def _build_crossattn_unet(**kwargs) -> nn.Module:
+    return RangeDiffusionBackbone(
+        num_classes=kwargs["num_classes"],
+        cond_channels=kwargs["input_channels"],
+        base_channels=kwargs.get("base_channels", 32),
+        dropout=kwargs.get("dropout", 0.1),
+    )
+
+
+CROSSATTN_UNET_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
+    supported_behaviors=("diffusion",),
+    build=_build_crossattn_unet,
+    add_args_with_names=add_range_crossattn_backbone_args,
+)

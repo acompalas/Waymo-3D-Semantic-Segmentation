@@ -3,15 +3,17 @@ import argparse
 import torch
 import torch.nn as nn
 
+from ..spec import BackboneSpec, make_backbone_spec
 from ...features import MultiScaleKnnEigenFeatureExtractor
 
 
-def add_handcrafted_backbone_args(parser: argparse.ArgumentParser) -> None:
+def add_handcrafted_backbone_args(parser: argparse.ArgumentParser) -> tuple[str, ...]:
     parser.add_argument("--knn-scales", type=str, default="16,32,64")
     parser.add_argument("--knn-query-chunk", type=int, default=4096)
     parser.add_argument("--hidden-dim", type=int, default=0)
     parser.add_argument("--depth", type=int, default=0)
     parser.add_argument("--dropout", type=float, default=0.0)
+    return ("knn_scales", "knn_query_chunk", "hidden_dim", "depth", "dropout")
 
 
 class HandcraftedPointBackbone(nn.Module):
@@ -64,3 +66,21 @@ class HandcraftedPointBackbone(nn.Module):
             point_features = xyz.new_zeros((*xyz.shape[:2], 2))
         features = self.feature_extractor(xyz, point_features)
         return self.post_mlp(features)
+
+
+def _build_handcrafted(**kwargs) -> nn.Module:
+    return HandcraftedPointBackbone(
+        input_dim=kwargs["input_dim"],
+        scales=kwargs.get("knn_scales", (16, 32, 64)),
+        knn_query_chunk=kwargs.get("knn_query_chunk", 4096),
+        hidden_dim=kwargs.get("hidden_dim", 0),
+        depth=kwargs.get("depth", 0),
+        dropout=kwargs.get("dropout", 0.0),
+    )
+
+
+HANDCRAFTED_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
+    supported_behaviors=("supervised",),
+    build=_build_handcrafted,
+    add_args_with_names=add_handcrafted_backbone_args,
+)

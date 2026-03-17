@@ -4,13 +4,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..spec import BackboneSpec, make_backbone_spec
 from .common import ConvBlock
 
 
-def add_range_unet_backbone_args(parser: argparse.ArgumentParser) -> None:
+def add_range_unet_backbone_args(parser: argparse.ArgumentParser) -> tuple[str, ...]:
     parser.add_argument("--base-channels", type=int, default=32)
     parser.add_argument("--depth", type=int, default=4)
     parser.add_argument("--dropout", type=float, default=0.0)
+    return ("base_channels", "depth", "dropout")
 
 
 class RangeUNetBackbone(nn.Module):
@@ -54,3 +56,19 @@ class RangeUNetBackbone(nn.Module):
             x = torch.cat([x, skip], dim=1)
             x = block(x)
         return x
+
+
+def _build_unet(**kwargs) -> nn.Module:
+    return RangeUNetBackbone(
+        in_channels=kwargs["input_channels"],
+        base_channels=kwargs.get("base_channels", 32),
+        depth=kwargs.get("depth", 4),
+        dropout=kwargs.get("dropout", 0.0),
+    )
+
+
+UNET_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
+    supported_behaviors=("supervised",),
+    build=_build_unet,
+    add_args_with_names=add_range_unet_backbone_args,
+)

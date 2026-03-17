@@ -3,12 +3,14 @@ import argparse
 import torch
 import torch.nn as nn
 
+from ..spec import BackboneSpec, make_backbone_spec
 from .common import PointNetFeaturePropagation, PointNetSetAbstraction
 
 
-def add_pointnetplusplus_backbone_args(parser: argparse.ArgumentParser) -> None:
+def add_pointnetplusplus_backbone_args(parser: argparse.ArgumentParser) -> tuple[str, ...]:
     parser.add_argument("--hidden-dim", type=int, default=256)
     parser.add_argument("--dropout", type=float, default=0.1)
+    return ("hidden_dim", "dropout")
 
 
 class PointNetPlusPlusBackbone(nn.Module):
@@ -94,3 +96,18 @@ class PointNetPlusPlusBackbone(nn.Module):
 
         x = self.post_mlp(l_features[0].transpose(1, 2)).transpose(1, 2)
         return x
+
+
+def _build_pointnetplusplus(**kwargs) -> nn.Module:
+    return PointNetPlusPlusBackbone(
+        input_dim=kwargs["input_dim"],
+        hidden_dim=kwargs.get("hidden_dim", 256),
+        dropout=kwargs.get("dropout", 0.1),
+    )
+
+
+POINTNETPLUSPLUS_BACKBONE_SPEC: BackboneSpec = make_backbone_spec(
+    supported_behaviors=("supervised",),
+    build=_build_pointnetplusplus,
+    add_args_with_names=add_pointnetplusplus_backbone_args,
+)

@@ -333,11 +333,14 @@ The intended extension path is small and consistent.
    - exposes `forward(inputs, *, xyz, t=None)`
    - sets `self.output_dim`
 3. Add an `add_<name>_backbone_args(parser)` function if the backbone needs CLI args.
-4. Register it in `src/models/backbones/point/registry.py`:
-   - import the class and CLI-arg function
-   - add a small `_build_<name>(**kwargs)` adapter
-   - add a `PointBackboneSpec` entry to `POINT_BACKBONE_SPECS`
+   - this function should register the CLI args
+   - it should also return the normalized parsed arg names, for example `("hidden_dim", "depth", "dropout")`
+4. Create a `<NAME>_BACKBONE_SPEC` in that same file using the shared `BackboneSpec` helper.
+   - the spec should declare `supported_behaviors`
+   - it should provide the backbone builder
+   - it should point at the backbone's CLI-arg function
 5. Declare `supported_behaviors`, for example `("supervised",)` or `("supervised", "diffusion")`.
+6. Add the spec constant to `POINT_BACKBONE_SPECS` in `src/models/backbones/point/registry.py`.
 
 ### Add a new range-image backbone
 
@@ -346,14 +349,28 @@ The intended extension path is small and consistent.
    - exposes `forward(x, *, cond=None, t=None)`
    - sets `self.output_channels`
 3. Add an `add_<name>_backbone_args(parser)` function if needed.
-4. Register it in `src/models/backbones/range/registry.py`.
-5. Declare `supported_behaviors`.
+   - this function should register the CLI args
+   - it should also return the normalized parsed arg names that belong to the backbone
+4. Create a `<NAME>_BACKBONE_SPEC` in that same file using the shared `BackboneSpec` helper.
+5. Add the spec constant to `RANGE_BACKBONE_SPECS` in `src/models/backbones/range/registry.py`.
 
-### When you may need one more change
+### How backbone CLI args are wired
 
-If your new backbone needs constructor kwargs that are not already packed in `src/runtime/registry.py`, update the representation-specific `ModelSelection.build_module(...)` path there.
+Backbone-specific CLI args and the `BackboneSpec` instance both live in the backbone file.
 
-That is the main remaining extension seam. Most new backbones only require:
+The selected backbone's module defines the two pieces of metadata the runtime needs:
+
+- an `add_<name>_backbone_args(parser)` function to add CLI args
+- a `BackboneSpec` instance that stores the parsed arg names and build function
+
+That means the backbone file is the single source of truth for both:
+
+- which CLI args exist
+- which parsed arg names belong to that backbone
+
+The registry just maps backbone names to those per-file spec instances.
+
+In the common case, adding a new backbone requires only:
 
 - one new backbone module
 - one registry entry
