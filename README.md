@@ -19,6 +19,18 @@ The CLI supports:
 
 W&B is the reporting backend for metrics, confusion matrices, and audit point clouds.
 
+## Dependencies
+
+- Training and evaluation: `torch`, `lightning`, `wandb`, `numpy`
+- Preprocessing: `numpy`, `polars`, `tqdm`
+- Rendering: `open3d`, `Pillow`
+
+A minimal pip install looks like:
+
+```bash
+pip install torch lightning wandb numpy polars tqdm open3d pillow
+```
+
 ## Representations
 
 | Representation | What It Uses | Best For | Notes |
