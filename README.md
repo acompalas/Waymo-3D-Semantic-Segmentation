@@ -84,6 +84,16 @@ python -m src.main train \
   --diffusion-steps 200
 ```
 
+Resume training from an existing checkpoint and continue the same W&B run:
+
+```bash
+python -m src.main train \
+  --representation point_clouds \
+  --behavior direct \
+  --backbone edgeconv \
+  --resume-from-checkpoint output/point_clouds__edgeconv__direct/<run-id>/checkpoints/last.ckpt
+```
+
 Evaluate a checkpoint:
 
 ```bash
@@ -164,7 +174,9 @@ These are required for every command.
 | `--wandb-project` | W&B project name | `"ece271b-final-project"` |
 | `--wandb-entity` | W&B entity/team | `None` |
 | `--wandb-run-name` | explicit W&B run name; if omitted, runtime generates `<representation>-<backbone>-YYYYMMDD-HHMMSS` | `None` |
+| `--wandb-run-id` | explicit W&B run id; mainly useful for manual W&B resume control | `None` |
 | `--wandb-tags` | comma-separated W&B tags | `""` |
+| `--resume-from-checkpoint` | Lightning checkpoint to resume training from; restores optimizer/scheduler/callback state and resumes the same W&B run when possible | `None` |
 | `--log-pointcloud-count` | audit point clouds logged per split | `4` |
 | `--geometry-only` | use only geometry channels | `False` |
 | `--val-samples-per-segment` | deterministic validation subsample count per segment; `None` resolves to behavior-dependent default | `None` |
@@ -197,6 +209,7 @@ These are required for every command.
 | `--wandb-project` | W&B project name | `"ece271b-final-project"` |
 | `--wandb-entity` | W&B entity/team | `None` |
 | `--wandb-run-name` | explicit W&B run name | `None` |
+| `--wandb-run-id` | explicit W&B run id | `None` |
 | `--wandb-tags` | comma-separated W&B tags | `""` |
 | `--log-pointcloud-count` | audit point clouds logged per split | `4` |
 | `--float32-matmul-precision` | PyTorch float32 matmul precision mode; choices: `highest`, `high`, `medium` | `"medium"` |

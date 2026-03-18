@@ -1,5 +1,6 @@
 import argparse
 from datetime import datetime
+import json
 from pathlib import Path
 import sys
 from typing import Iterable
@@ -64,7 +65,9 @@ def add_common_train_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wandb-project", type=str, default="ece271b-final-project")
     parser.add_argument("--wandb-entity", type=str, default=None)
     parser.add_argument("--wandb-run-name", type=str, default=None)
+    parser.add_argument("--wandb-run-id", type=str, default=None)
     parser.add_argument("--wandb-tags", type=str, default="")
+    parser.add_argument("--resume-from-checkpoint", type=Path, default=None)
     parser.add_argument("--log-pointcloud-count", type=int, default=4)
     parser.add_argument("--geometry-only", action="store_true")
     parser.add_argument("--val-samples-per-segment", type=int, default=None)
@@ -95,6 +98,7 @@ def add_common_eval_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wandb-project", type=str, default="ece271b-final-project")
     parser.add_argument("--wandb-entity", type=str, default=None)
     parser.add_argument("--wandb-run-name", type=str, default=None)
+    parser.add_argument("--wandb-run-id", type=str, default=None)
     parser.add_argument("--wandb-tags", type=str, default="")
     parser.add_argument("--log-pointcloud-count", type=int, default=4)
     add_torch_runtime_args(parser)
@@ -214,23 +218,108 @@ def _default_wandb_run_name(selection, timestamp: str) -> str:
     return f"{_default_wandb_name_prefix(selection)}-{str(timestamp)}"
 
 
+def _wandb_run_metadata_path(run_dir: Path) -> Path:
+    return Path(run_dir) / "wandb_run.json"
+
+
+def _load_wandb_run_metadata(run_dir: Path) -> dict[str, object]:
+    path = _wandb_run_metadata_path(run_dir)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _resolve_resume_checkpoint(args: argparse.Namespace) -> Path | None:
+    checkpoint = getattr(args, "resume_from_checkpoint", None)
+    if checkpoint is None:
+        return None
+    path = Path(checkpoint)
+    if not path.exists():
+        raise FileNotFoundError(f"Resume checkpoint does not exist: {path}")
+    return path
+
+
+def _resume_run_dir(checkpoint_path: Path) -> Path:
+    checkpoint_dir = Path(checkpoint_path).parent
+    run_dir = checkpoint_dir.parent
+    if not checkpoint_dir.name or run_dir == checkpoint_dir:
+        raise ValueError(f"Unable to infer run directory from checkpoint: {checkpoint_path}")
+    return run_dir
+
+
+def _resolve_wandb_run_id(
+    args: argparse.Namespace,
+    *,
+    resume_checkpoint: Path | None = None,
+) -> str:
+    explicit = getattr(args, "wandb_run_id", None)
+    if explicit:
+        return str(explicit)
+    if resume_checkpoint is not None:
+        metadata = _load_wandb_run_metadata(_resume_run_dir(resume_checkpoint))
+        saved_run_id = metadata.get("id")
+        if saved_run_id:
+            return str(saved_run_id)
+        return str(_resume_run_dir(resume_checkpoint).name)
+    return _generate_wandb_run_id()
+
+
+def _resolve_wandb_run_name(
+    args: argparse.Namespace,
+    selection,
+    *,
+    resume_checkpoint: Path | None = None,
+) -> str | None:
+    if args.wandb_run_name:
+        return str(args.wandb_run_name)
+    if resume_checkpoint is not None:
+        metadata = _load_wandb_run_metadata(_resume_run_dir(resume_checkpoint))
+        saved_name = metadata.get("name")
+        if saved_name:
+            return str(saved_name)
+        return None
+    return _default_wandb_run_name(selection, _wandb_name_timestamp())
+
+
+def _resolve_wandb_save_dir(
+    args: argparse.Namespace,
+    selection,
+    *,
+    resume_checkpoint: Path | None = None,
+) -> Path:
+    if resume_checkpoint is None:
+        return Path(args.output_dir)
+    run_dir = _resume_run_dir(resume_checkpoint)
+    if run_dir.parent.name == selection.model_id:
+        return run_dir.parent.parent
+    return Path(args.output_dir)
+
+
 def build_wandb_logger(
     args: argparse.Namespace,
     selection,
     *,
     job_type: str,
 ) -> WandbLogger:
-    run_id = _generate_wandb_run_id()
-    run_name = args.wandb_run_name or _default_wandb_run_name(selection, _wandb_name_timestamp())
+    resume_checkpoint = _resolve_resume_checkpoint(args) if str(job_type) == "train" else None
+    run_id = _resolve_wandb_run_id(args, resume_checkpoint=resume_checkpoint)
+    run_name = _resolve_wandb_run_name(args, selection, resume_checkpoint=resume_checkpoint)
+    save_dir = _resolve_wandb_save_dir(args, selection, resume_checkpoint=resume_checkpoint)
+    wandb_kwargs = {"resume": "must"} if resume_checkpoint is not None else {}
     return WandbLogger(
         project=str(args.wandb_project),
         entity=args.wandb_entity,
         name=run_name,
-        save_dir=str(args.output_dir),
+        save_dir=str(save_dir),
         id=run_id,
         tags=_wandb_tags(args.wandb_tags),
         job_type=str(job_type),
         log_model=False,
+        **wandb_kwargs,
     )
 
 
@@ -257,6 +346,28 @@ def log_cli_hyperparams(
     args: argparse.Namespace,
 ) -> None:
     logger.log_hyperparams(build_cli_hparams_payload(args))
+
+
+def _training_run_dir(args: argparse.Namespace, selection, logger) -> Path:
+    resume_checkpoint = _resolve_resume_checkpoint(args)
+    if resume_checkpoint is not None:
+        return _resume_run_dir(resume_checkpoint)
+    return Path(logger.save_dir) / selection.model_id / str(getattr(logger, "version", "run"))
+
+
+def _persist_wandb_run_metadata(run_dir: Path, logger, selection) -> None:
+    experiment = logger.experiment
+    metadata = {
+        "id": str(getattr(experiment, "id", getattr(logger, "version", ""))),
+        "name": getattr(experiment, "name", None),
+        "model_id": str(selection.model_id),
+        "save_dir": str(logger.save_dir),
+    }
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _wandb_run_metadata_path(run_dir).write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def configure_torch_runtime(args: argparse.Namespace) -> None:
@@ -323,10 +434,15 @@ def run_train(args: argparse.Namespace) -> None:
     L.seed_everything(args.seed, workers=True)
     datamodule = build_datamodule(args)
     model = selection.build_module(args)
+    resume_checkpoint = _resolve_resume_checkpoint(args)
+    if resume_checkpoint is not None:
+        resumed_model = selection.load_from_checkpoint(resume_checkpoint)
+        _validate_loaded_model_selection(resumed_model, selection)
 
     logger = build_wandb_logger(args, selection, job_type="train")
     log_cli_hyperparams(logger, args)
-    run_dir = Path(logger.save_dir) / selection.model_id / str(getattr(logger, "version", "run"))
+    run_dir = _training_run_dir(args, selection, logger)
+    _persist_wandb_run_metadata(run_dir, logger, selection)
     checkpoint_cb = ModelCheckpoint(
         dirpath=run_dir / "checkpoints",
         monitor="valid_metrics/valid_miou",
@@ -344,7 +460,7 @@ def run_train(args: argparse.Namespace) -> None:
     )
     wandb_cb = WandbSegmentationCallback(log_pointcloud_count=int(args.log_pointcloud_count))
     trainer = configure_trainer(args, logger, [checkpoint_cb, early_stopping_cb, wandb_cb])
-    trainer.fit(model=model, datamodule=datamodule)
+    trainer.fit(model=model, datamodule=datamodule, ckpt_path=resume_checkpoint)
 
     if not bool(args.auto_evaluate):
         logger.experiment.finish()
