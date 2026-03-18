@@ -24,6 +24,7 @@ W&B is the reporting backend for metrics, confusion matrices, and audit point cl
 - Training and evaluation: `torch`, `lightning`, `wandb`, `numpy`
 - Preprocessing: `numpy`, `polars`, `tqdm`
 - Rendering: `open3d`, `Pillow`
+- Optional sparse 3D UNet backbone: `MinkowskiEngine`
 
 A minimal pip install looks like:
 
@@ -53,6 +54,7 @@ pip install torch lightning wandb numpy polars tqdm open3d pillow
 | --- | --- | --- |
 | `pointnet` | `direct`, `diffusion` | residual per-point MLP stack with global max-pooled context |
 | `edgeconv` | `direct`, `diffusion` | KNN graph backbone with EdgeConv-style local updates |
+| `minkowski` | `direct`, `diffusion` | sparse 3D voxel U-Net with MinkowskiEngine quantization, strided sparse convs, and transpose-conv decoding |
 | `pointnetplusplus` | `direct` | PointNet++ hierarchy with set abstraction and feature propagation |
 | `handcrafted` | `direct` | multi-scale handcrafted geometric features with optional learned post-MLP |
 
@@ -263,6 +265,19 @@ These arguments are only added to the `train` CLI when the chosen backbone decla
 | `--hidden-dim` | final feature width after feature propagation | `256` |
 | `--dropout` | post-MLP dropout | `0.1` |
 
+### `minkowski`
+
+Requires the optional `MinkowskiEngine` dependency in a compatible environment.
+
+| Argument | Description | Default |
+| --- | --- | --- |
+| `--hidden-dim` | base sparse U-Net channel width | `64` |
+| `--depth` | number of encoder resolutions in the sparse U-Net | `4` |
+| `--dropout` | dropout inside sparse residual blocks | `0.1` |
+| `--voxel-size` | voxel size used to quantize point coordinates before sparse convolution | `0.2` |
+| `--stem-kernel-size` | kernel size for the input sparse stem block | `5` |
+| `--kernel-size` | kernel size for encoder, bottleneck, and decoder sparse blocks | `3` |
+
 ### `handcrafted`
 
 | Argument | Description | Default |
@@ -361,6 +376,7 @@ python data_pipeline/preprocess_point_clouds.py \
 - when omitted, validation defaults are:
   - direct: full validation set
   - diffusion: `1` frame per segment
+- the `minkowski` backbone is optional and will raise an import error at model construction time if `MinkowskiEngine` is not installed
 - metrics only use `valid_label`
 - class `0` is excluded from mIoU and displayed confusion matrices
 - W&B logs:

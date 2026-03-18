@@ -74,6 +74,39 @@ class RegistryCliTests(unittest.TestCase):
         )
         self.assertEqual(args.diffusion_steps, 8)
 
+    def test_minkowski_parser_adds_sparse_unet_args(self) -> None:
+        args = parse_args(
+            [
+                "train",
+                "--representation",
+                "point_clouds",
+                "--behavior",
+                "direct",
+                "--backbone",
+                "minkowski",
+                "--hidden-dim",
+                "48",
+                "--depth",
+                "3",
+                "--dropout",
+                "0.2",
+                "--voxel-size",
+                "0.25",
+                "--stem-kernel-size",
+                "7",
+                "--kernel-size",
+                "5",
+                "--no-auto-evaluate",
+            ]
+        )
+        self.assertEqual(args.backbone, "minkowski")
+        self.assertEqual(args.hidden_dim, 48)
+        self.assertEqual(args.depth, 3)
+        self.assertEqual(args.dropout, 0.2)
+        self.assertEqual(args.voxel_size, 0.25)
+        self.assertEqual(args.stem_kernel_size, 7)
+        self.assertEqual(args.kernel_size, 5)
+
     def test_range_render_parser_accepts_requested_components(self) -> None:
         args = parse_args(
             [
@@ -128,7 +161,7 @@ class RegistryCliTests(unittest.TestCase):
             )
 
     def test_registry_filters_choices_by_behavior(self) -> None:
-        self.assertEqual(backbone_choices("point_clouds", "diffusion"), ["edgeconv", "pointnet"])
+        self.assertEqual(backbone_choices("point_clouds", "diffusion"), ["dp3", "edgeconv", "minkowski", "pointnet"])
 
     def test_selection_builds_composite_model_id(self) -> None:
         selection = get_model_selection("point_clouds", "edgeconv", "direct")

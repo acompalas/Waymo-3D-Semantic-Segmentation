@@ -391,6 +391,11 @@ class DataAndModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             diffusion_model.backbone(diffusion_inputs, xyz=xyz)
 
+    def test_minkowski_backbone_requires_optional_dependency(self) -> None:
+        with patch("src.models.backbones.point.minkowski.importlib.import_module", side_effect=ImportError("missing")):
+            with self.assertRaisesRegex(ImportError, "MinkowskiEngine"):
+                PointCloudTaskModel(num_classes=23, backbone="minkowski", behavior="direct")
+
     def test_handcrafted_backbone_uses_shared_head(self) -> None:
         model = PointCloudTaskModel(num_classes=23, backbone="handcrafted", behavior="direct")
         self.assertEqual(model.head.linear.out_features, 23)
